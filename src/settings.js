@@ -13,6 +13,7 @@ export const DEFAULTS = {
   showFps: false,
   botCount: 5,
   killLimit: 20,
+  doodler: 'normies',
 };
 
 export const RANGES = {

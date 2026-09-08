@@ -6,6 +6,8 @@ import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT, BODY_RADIUS 
 import { WEAPONS, HOLD, ADS, MUZZLE, CYCLE } from './weapons.js';
 import { M4, V, Rng, clamp, lerp, damp, smoothstep, dirFrom, DEG, TAU } from './math.js';
 import { settings } from './settings.js';
+import { getDoodler } from './doodlers.js';
+import { SHIELD_MAX_HP, SHIELD_PATCH_BELOW } from './skills.js';
 import { Sfx } from './audio.js';
 import { FillBuilder, InkBuilder } from './geom.js';
 import { MAT } from './renderer.js';
@@ -18,9 +20,8 @@ const GRAVITY = 18.5;
 const JUMP_VEL = 6.35;
 const PICKUP_RANGE = 3.1;
 
-// Running momentum. Keep moving forward and you wind up to +55% speed; anything that
-// interrupts a clean run - reversing, a wall, stopping - dumps it entirely.
-const MOMENTUM_MAX = 0.55;
+// Running momentum. Keep moving forward and you wind up; anything that interrupts a clean
+// run - reversing, a wall, stopping - dumps it entirely. The ceiling is per-doodler.
 const MOMENTUM_RAMP = 4.2;          // seconds of clean running to reach the top
 const MOMENTUM_MIN_SPEED = 2.6;     // below this you aren't running, you're shuffling
 const STRAFE_BLEED = 0.10;          // fraction of the *boost* a sidestep costs
@@ -82,9 +83,14 @@ export class Player {
     this.vel = V.make(0, 0, 0);
     this.yaw = 0;
     this.pitch = 0;
-    this.maxHealth = 100;
+    this.doodler = getDoodler(settings.doodler);
+    this.maxHealth = this.doodler.health;
     this.health = this.maxHealth;
     this.alive = true;
+    this.skillCooldown = 0;
+    this.skillCharges = this.doodler.skill?.charges ?? 0;
+    this.slideT = 0;
+    this.slideDip = 0;
     this.kills = 0;
     this.deaths = 0;
     this.onGround = true;
@@ -131,7 +137,7 @@ export class Player {
   ensureMeshes(gl) { if (!this.flashMesh) this.flashMesh = buildFlashMesh(gl); }
 
   get eye() {
-    return V.make(this.pos.x, this.pos.y + EYE_HEIGHT + this.viewBob - this.landDip, this.pos.z);
+    return V.make(this.pos.x, this.pos.y + EYE_HEIGHT + this.viewBob - this.landDip - this.slideDip, this.pos.z);
   }
 
   /** Camera angles including recoil punch. */
@@ -149,6 +155,7 @@ export class Player {
   respawn(pos) {
     V.copy(this.pos, pos);
     V.set(this.vel, 0, 0, 0);
+    this.maxHealth = this.doodler.health;
     this.health = this.maxHealth;
     this.alive = true;
     this.deathTimer = 0;
@@ -157,6 +164,10 @@ export class Player {
     this.loadout = new Loadout('pistol');
     this.pitch = 0;
     this.momentum = 0;
+    this.skillCooldown = 0;
+    this.skillCharges = this.doodler.skill?.charges ?? 0;
+    this.slideT = 0;
+    this.slideDip = 0;
     this.idleTimer = 0;
     this.twirlActive = false;
     this.twirlBlend = 0;
@@ -164,7 +175,16 @@ export class Player {
   }
 
   /** Speed multiplier from running momentum. */
-  get momentumMult() { return 1 + MOMENTUM_MAX * this.momentum; }
+  get momentumMult() { return 1 + this.doodler.momentumMax * this.momentum; }
+
+  /** Swap class. Takes effect immediately - callers respawn afterwards for a clean start. */
+  applyDoodler(id) {
+    this.doodler = getDoodler(id);
+    this.maxHealth = this.doodler.health;
+    this.health = Math.min(this.health, this.maxHealth);
+    this.skillCooldown = 0;
+    this.skillCharges = this.doodler.skill?.charges ?? 0;
+  }
 
   // ------------------------------------------------------------ input
 
@@ -214,7 +234,7 @@ export class Player {
 
     const def = this.loadout.def;
     const scopePenalty = lerp(1, 0.45, this.loadout.scopeT);
-    const maxSpeed = WALK_SPEED * (def.moveMult ?? 1) * scopePenalty * this.momentumMult;
+    const maxSpeed = WALK_SPEED * this.doodler.speedMult * (def.moveMult ?? 1) * scopePenalty * this.momentumMult;
 
     const accel = this.onGround ? ACCEL : AIR_ACCEL;
     this.vel.x += wx * accel * dt;
@@ -229,7 +249,15 @@ export class Player {
       }
     }
     const sp = Math.hypot(this.vel.x, this.vel.z);
-    if (sp > maxSpeed) { const k = maxSpeed / sp; this.vel.x *= k; this.vel.z *= k; }
+    if (sp > maxSpeed && this.slideT <= 0) { const k = maxSpeed / sp; this.vel.x *= k; this.vel.z *= k; }
+
+    if (this.slideT > 0) {
+      this.slideT -= dt;
+      // Bleed the burst off rather than cutting it, and duck for the duration.
+      this.vel.x *= 1 - 1.4 * dt;
+      this.vel.z *= 1 - 1.4 * dt;
+    }
+    this.slideDip = damp(this.slideDip, this.slideT > 0 ? 0.34 : 0, 12, dt);
 
     // --- jump
     if (input.down('Space') && this.onGround) {
@@ -263,6 +291,13 @@ export class Player {
     this.roll = damp(this.roll, -strafeLean * 0.021, 8, dt);
 
     // --- weapons
+    // --- skills
+    if (this.skillCooldown > 0) {
+      this.skillCooldown = Math.max(0, this.skillCooldown - dt);
+      if (this.skillCooldown === 0) this.skillCharges = this.doodler.skill?.charges ?? 0;
+    }
+    if (input.hit('KeyQ')) this.useSkill();
+
     this.loadout.update(dt);
     this._updateWeaponInput(dt, input, now);
 
@@ -315,7 +350,7 @@ export class Player {
     if (input.wheel !== 0) { if (lo.toggle()) Sfx.reload('in'); }
     if (input.hit('Digit1') && lo.switchTo('melee')) Sfx.reload('in');
     if (input.hit('Digit2') && lo.switchTo('gun')) Sfx.reload('in');
-    if (input.hit('KeyQ')) { if (lo.toggle()) Sfx.reload('in'); }
+
 
     // Sniper scope: right mouse must be held, releasing cancels it.
     if (def.scope && !lo.busy && lo.ammo > 0) {
@@ -355,6 +390,55 @@ export class Player {
         else this._fireGun(def);
       }
     }
+  }
+
+  /**
+   * Q. Each doodler's skill is a different shape, so this is a small switch rather than a
+   * generic system - there are four of them and they share almost nothing.
+   */
+  useSkill() {
+    const skill = this.doodler.skill;
+    if (!skill || !this.alive) return false;
+    const game = this.game;
+
+    if (skill.id === 'shield') {
+      const sh = game.shieldOf(this);
+      // Only patchable once it's nearly gone - you can't top it up after every graze.
+      if (sh && sh.alive && sh.hp >= SHIELD_PATCH_BELOW) {
+        game.toast(`SHIELD STILL HOLDING (${Math.ceil(sh.hp)})`);
+        return false;
+      }
+      if (this.skillCooldown > 0) return false;
+      if (!sh || !sh.alive) game.spawnShield(this);
+      else sh.reset(SHIELD_MAX_HP);
+      this.skillCooldown = skill.cooldown;
+      Sfx.pickup();
+      game.toast('SHIELD REDRAWN');
+      return true;
+    }
+
+    if (skill.id === 'turret') {
+      if (this.skillCharges <= 0) return false;
+      if (!game.placeTurret(this)) return false;
+      this.skillCharges--;
+      if (this.skillCharges <= 0) this.skillCooldown = skill.cooldown;
+      Sfx.reload('in');
+      game.toast(`TURRET DOWN (${this.skillCharges} left)`);
+      return true;
+    }
+
+    if (skill.id === 'slide') {
+      if (this.skillCooldown > 0 || !this.onGround) return false;
+      const dir = dirFrom(this.yaw, 0, this._dir);
+      const burst = WALK_SPEED * this.doodler.speedMult * this.momentumMult * 2.1;
+      this.vel.x = dir.x * burst;
+      this.vel.z = dir.z * burst;
+      this.slideT = 0.45;
+      this.skillCooldown = skill.cooldown;
+      Sfx.swing();
+      return true;
+    }
+    return false;
   }
 
   _fireGun(def) {

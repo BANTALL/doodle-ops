@@ -7,7 +7,7 @@ import { unitQuadMesh, QUAD_LAYOUT } from './geom.js';
 import * as S from './shaders.js';
 import { M3, M4, V, clamp } from './math.js';
 import { Frustum } from './frustum.js';
-import { makePaperTexture, makeHatchTexture, makeCrayonTexture, makeSplatAtlas, makeFlashTexture, makeSmudgeTexture, makeStreakTexture, makePuffTexture } from './textures.js';
+import { makePaperTexture, makeHatchTexture, makeCrayonTexture, makeSplatAtlas, makeFlashTexture, makeSmudgeTexture, makeStreakTexture, makePuffTexture, makeShieldTexture } from './textures.js';
 
 export const MAT = {
   WALL: 0, FLOOR: 1, CEIL: 2, LIGHT: 3, CRATE: 4, TRIM: 5,
@@ -71,6 +71,7 @@ export class Renderer {
     this.texSmudge = textureFromCanvas(gl, makeSmudgeTexture(128), { wrap: 'clamp', mipmap: true });
     this.texStreak = textureFromCanvas(gl, makeStreakTexture(256, 64), { wrap: 'clamp', mipmap: true });
     this.texPuff = textureFromCanvas(gl, makePuffTexture(128), { wrap: 'clamp', mipmap: true });
+    this.texShield = textureFromCanvas(gl, makeShieldTexture(256), { wrap: 'clamp', mipmap: true });
 
     this.quadMesh = unitQuadMesh(gl);
     this.emptyVao = gl.createVertexArray();

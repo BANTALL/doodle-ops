@@ -190,6 +190,18 @@ export function resolveShot(world, shooter, origin, dir, def, hitOut = {}) {
       : ay > az ? { x: 0, y: Math.sign(dy), z: 0 } : { x: 0, y: 0, z: Math.sign(dz) };
   }
 
+  // Shields are checked before bodies, and bestDist carries forward, so anyone standing
+  // behind one is protected for free.
+  if (world.shields) {
+    for (const sh of world.shields) {
+      const t = sh.rayHit(origin, dir, bestDist, shooter);
+      if (t !== null && t < bestDist) {
+        bestDist = t; kind = 'shield'; target = sh; head = false;
+        normal = sh.normal();
+      }
+    }
+  }
+
   for (const a of actors) {
     if (a === shooter || !a.alive) continue;
     const hit = rayCharacter(origin, dir, a.pos, BODY_RADIUS, BODY_HEIGHT, HEAD_Y, HEAD_R, bestDist);

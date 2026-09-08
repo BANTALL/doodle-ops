@@ -187,6 +187,7 @@ export class Hud {
     this._hitMarkers(cx, cy);
     this._speedLines(game);
     this._health(game);
+    this._skill(game);
     this._ammo(game);
     this._weaponSlots(game);
     this._pickupPrompt(game);
@@ -317,6 +318,50 @@ export class Hud {
     }
     this.text('HP', x, y - 8, 17, 'left', INK);
     this.text(`${Math.ceil(p.health)}`, x + w, y - 8, 20, 'right', p.health > 35 ? INK : RED);
+  }
+
+  /** Skill readout: name, whether it's ready, charges, and the shield's remaining hit points. */
+  _skill(game) {
+    const p = game.player;
+    const skill = p.doodler.skill;
+    const x = 30;
+    let y = this.h - 92;
+
+    // Doodler name always shows, so you can tell at a glance what you picked.
+    this.text(p.doodler.name, x, this.h - 100, 14, 'left', INK_SOFT, 'normal');
+    if (!skill) return;
+
+    const shield = game.shieldOf(p);
+    if (shield && shield.alive) {
+      const w = 190, hgt = 12;
+      y = this.h - 138;
+      this.rect(x, y, w, hgt, 2.2, 150);
+      const frac = clamp(shield.hp / 50, 0, 1);
+      if (frac > 0) this.hatch(x + 2, y + 2, (w - 4) * frac, hgt - 4, 151, frac < 0.2 ? RED : INK, 6, 1.8);
+      this.text(`SHIELD ${Math.ceil(shield.hp)}`, x + w + 10, y + hgt, 14, 'left', frac < 0.2 ? RED : INK_SOFT);
+    }
+
+    const ready = p.skillCooldown <= 0 && (skill.charges <= 1 || p.skillCharges > 0);
+    const label = `[Q] ${skill.name}`;
+    const ly = this.h - 118;
+    this.text(label, x, ly, 16, 'left', ready ? INK : INK_SOFT);
+
+    if (p.skillCooldown > 0) {
+      const w = 150, bh = 7;
+      const t = 1 - p.skillCooldown / skill.cooldown;
+      this.rect(x + 132, ly - 9, w, bh, 1.8, 152);
+      this.hatch(x + 134, ly - 7, (w - 4) * t, bh - 4, 153, INK_SOFT, 5, 1.4);
+      this.text(`${Math.ceil(p.skillCooldown)}s`, x + 132 + w + 8, ly, 13, 'left', INK_SOFT, 'normal');
+    } else if (skill.charges > 1) {
+      // Charge pips, so you can see how many turrets you still have.
+      for (let i = 0; i < skill.charges; i++) {
+        const cx = x + 140 + i * 20;
+        this.circle(cx, ly - 5, 6, 2, 154 + i, i < p.skillCharges ? INK : INK_SOFT);
+        if (i < p.skillCharges) { const g = this.ctx; g.fillStyle = INK; g.beginPath(); g.arc(cx, ly - 5, 3, 0, TAU); g.fill(); }
+      }
+    } else {
+      this.text('READY', x + 140, ly, 14, 'left', INK);
+    }
   }
 
   _ammo(game) {

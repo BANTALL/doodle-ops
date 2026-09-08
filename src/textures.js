@@ -312,3 +312,53 @@ export function makePuffTexture(size = 128, seed = 71) {
   g.putImageData(img, 0, 0);
   return c;
 }
+
+/** Translucent paper shield: a washed panel with a heavy drawn border and cross-hatching. */
+export function makeShieldTexture(size = 256, seed = 17) {
+  const rng = new Rng(seed);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, size, size);
+
+  // Shield outline: a rounded slab that tapers to a point at the bottom.
+  const path = new Path2D();
+  const w = size * 0.40, top = size * 0.10, bot = size * 0.94;
+  path.moveTo(size / 2 - w, top + size * 0.06);
+  path.quadraticCurveTo(size / 2, top - size * 0.03, size / 2 + w, top + size * 0.06);
+  path.lineTo(size / 2 + w * 0.96, size * 0.58);
+  path.quadraticCurveTo(size / 2 + w * 0.72, size * 0.84, size / 2, bot);
+  path.quadraticCurveTo(size / 2 - w * 0.72, size * 0.84, size / 2 - w * 0.96, size * 0.58);
+  path.closePath();
+
+  g.save();
+  g.clip(path);
+  g.fillStyle = 'rgba(255,255,255,0.55)';
+  g.fillRect(0, 0, size, size);
+  // Cross-hatch so it reads as drawn glass rather than a flat alpha rectangle.
+  g.strokeStyle = 'rgba(255,255,255,0.85)';
+  g.lineCap = 'round';
+  for (let pass = 0; pass < 2; pass++) {
+    const dir = pass === 0 ? 1 : -1;
+    g.lineWidth = size * 0.006;
+    for (let i = -size; i < size * 2; i += size * 0.055) {
+      g.beginPath();
+      g.moveTo(i + rng.range(-3, 3), 0);
+      g.lineTo(i + dir * size + rng.range(-3, 3), size);
+      g.stroke();
+    }
+  }
+  g.restore();
+
+  // Border, drawn twice at slightly different weights like a pen gone round again.
+  g.lineJoin = 'round';
+  for (let k = 0; k < 2; k++) {
+    g.lineWidth = size * (k === 0 ? 0.028 : 0.012);
+    g.strokeStyle = k === 0 ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)';
+    g.save();
+    g.translate(rng.range(-2, 2), rng.range(-2, 2));
+    g.stroke(path);
+    g.restore();
+  }
+  return c;
+}

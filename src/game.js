@@ -11,6 +11,8 @@ import { Input } from './input.js';
 import { buildWeaponModels, WEAPONS, randomGunId } from './weapons.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
+import { Shield, Turret, buildSkillMeshes } from './skills.js';
+import { getDoodler } from './doodlers.js';
 import { settings } from './settings.js';
 import { Sfx, resumeAudio } from './audio.js';
 import { M4, V, Rng, clamp, lerp, smoothstep, yawOf, dirFrom } from './math.js';
@@ -30,6 +32,7 @@ export class Game {
     this.ui = ui;
 
     this.weapons = buildWeaponModels(this.gl);
+    this.skillMeshes = buildSkillMeshes(this.gl);
     this.botNames = [...BOT_NAMES];
 
     this.time = 0;
@@ -53,6 +56,8 @@ export class Game {
     this.player.ensureMeshes(this.gl);
     this.bots = [];
     this.actors = [this.player];
+    this.shields = [];
+    this.turrets = [];
 
     this.map = null;
     this.entities = null;
@@ -114,10 +119,14 @@ export class Game {
     for (let i = 0; i < count; i++) this.bots.push(new Bot(this, i, seed));
 
     this.actors = [this.player, ...this.bots];
-    this.world = { map: this.map, entities: this.entities, actors: this.actors };
+    this.shields.length = 0;
+    this.turrets.length = 0;
+    this.world = { map: this.map, entities: this.entities, actors: this.actors, shields: this.shields };
 
     this.player.kills = 0; this.player.deaths = 0;
+    this.player.applyDoodler(settings.doodler);
     this.player.respawn(this.pickSpawn(null));
+    this.onActorSpawned(this.player);
     for (const b of this.bots) { b.kills = 0; b.deaths = 0; b.respawn(this.pickSpawn(b)); b.animStep(ANIM_DT); }
 
     this.hud.killFeed.length = 0;
@@ -217,11 +226,23 @@ export class Game {
     this.entities.update(dt);
     this.collectHearts(this.player);
     for (const b of this.bots) this.collectHearts(b);
+
+    for (let i = this.shields.length - 1; i >= 0; i--) {
+      const sh = this.shields[i];
+      if (!sh.owner.alive) { this.shields.splice(i, 1); continue; }
+      sh.update(dt, this.time);
+    }
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const t = this.turrets[i];
+      t.update(dt, this);
+      if (!t.alive) this.turrets.splice(i, 1);
+    }
     if (this.impact.t > 0) this.impact.t = Math.max(0, this.impact.t - dt);
 
     // Respawns.
     if (!this.player.alive && now >= this.player.respawnAt) {
       this.player.respawn(this.pickSpawn(this.player));
+      this.onActorSpawned(this.player);
       this.toast('BACK IN THE DRAWING');
     }
     for (const b of this.bots) {
@@ -269,6 +290,7 @@ export class Game {
       b.animStep(ANIM_DT, d < 9 || (facing > 0.15 && d < 75));
     }
     this.entities.animStep();
+    for (const t of this.turrets) t.animStep();
   }
 
   // ------------------------------------------------------------ world helpers
@@ -323,6 +345,48 @@ export class Game {
     return blocked;
   }
 
+  // ------------------------------------------------------------ skills
+
+  shieldOf(owner) {
+    for (const s of this.shields) if (s.owner === owner) return s;
+    return null;
+  }
+
+  spawnShield(owner) {
+    const existing = this.shieldOf(owner);
+    if (existing) { existing.reset(); return existing; }
+    const sh = new Shield(owner);
+    sh.update(0, this.time);
+    this.shields.push(sh);
+    return sh;
+  }
+
+  removeShield(owner) {
+    const i = this.shields.findIndex((s) => s.owner === owner);
+    if (i >= 0) this.shields.splice(i, 1);
+  }
+
+  /** Drop a turret on open floor just in front of its owner. */
+  placeTurret(owner) {
+    const dir = dirFrom(owner.yaw, 0, this._v);
+    for (const dist of [1.9, 1.5, 1.2, 2.4]) {
+      const x = owner.pos.x + dir.x * dist;
+      const z = owner.pos.z + dir.z * dist;
+      if (!this.map._circleFree(x, z, 0.55)) continue;
+      if (this.entities.blocksCircle(x, z, 0.55)) continue;
+      const pos = V.make(x, this.groundHeight(x, z, owner.pos.y + 0.5), z);
+      this.turrets.push(new Turret(owner, pos, this.rng));
+      return true;
+    }
+    this.toast('NO ROOM FOR A TURRET');
+    return false;
+  }
+
+  /** Give a freshly spawned actor whatever their class starts with. */
+  onActorSpawned(a) {
+    if (a.doodler?.skill?.id === 'shield') this.spawnShield(a);
+  }
+
   /** Hearts are walked over, not picked up with a key - by anyone, bots included. */
   collectHearts(a) {
     if (!a.alive || a.health >= a.maxHealth) return;
@@ -375,6 +439,17 @@ export class Game {
       ent.addPuff(hit.point, 0.24);
       ent.damageCrate(hit.target, hit.damage, (c) => this.onCrateBroken(c));
       if (isPlayer) this.hud.addHitMarker(false);
+    } else if (hit.kind === 'shield') {
+      const broke = hit.target.takeDamage(hit.damage);
+      ent.addPuff(hit.point, 0.22);
+      if (isPlayer) this.hud.addHitMarker(false);
+      if (broke) {
+        ent.addShards(hit.point, 12, 2.4);
+        Sfx.crateBreak(V.dist(hit.point, this.player.pos));
+        if (hit.target.owner.isPlayer) this.toast('SHIELD BROKE');
+      } else {
+        Sfx.ricochet(V.dist(hit.point, this.player.pos));
+      }
     } else if (hit.kind === 'world') {
       ent.addDecal(hit.point, hit.normal, 0.30 + (def.id === 'sniper' ? 0.16 : 0));
       ent.addPuff(hit.point, 0.2);
@@ -425,6 +500,8 @@ export class Game {
     victim.alive = false;
     victim.deaths++;
     victim.dropGun?.();
+    this.removeShield(victim);
+    for (const t of this.turrets) if (t.owner === victim) t.expire(this);
     if (!victim.isPlayer) {
       // Bots drop whatever they were carrying too.
       const lo = victim.loadout;
@@ -506,6 +583,8 @@ export class Game {
     }
 
     this.entities.render(r, this.camera);
+    for (const sh of this.shields) sh.render(r, this.skillMeshes);
+    for (const t of this.turrets) t.render(r, this.skillMeshes, this);
     for (const b of this.bots) {
       r.stats.actors++;
       // Generous radius: the rig reaches about a metre out from the root in any direction.

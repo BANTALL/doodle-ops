@@ -3,11 +3,13 @@
 import { Game } from './game.js';
 import { settings, setSetting, resetSettings } from './settings.js';
 import { initAudio, resumeAudio, setVolume, Sfx } from './audio.js';
+import { DOODLERS, DOODLER_IDS } from './doodlers.js';
 
 const $ = (sel) => document.querySelector(sel);
 
 const screens = {
   start: $('#screen-start'),
+  class: $('#screen-class'),
   pause: $('#screen-pause'),
   end: $('#screen-end'),
   error: $('#screen-error'),
@@ -110,7 +112,39 @@ function main() {
     game.setPaused(false);
   };
 
-  $('#btn-play').addEventListener('click', startPlaying);
+  // ---- doodler picker
+  const cards = $('#class-cards');
+  const renderCards = () => {
+    cards.innerHTML = DOODLER_IDS.map((id) => {
+      const d = DOODLERS[id];
+      const picked = settings.doodler === id;
+      return `<button class="class-card" data-doodler="${id}" aria-pressed="${picked}">
+        ${picked ? '<span class="current">CURRENT</span>' : ''}
+        <h3>${d.name}</h3>
+        <span class="tag">${d.tag}</span>
+        <ul>${d.lines.map((l) => `<li>${l}</li>`).join('')}</ul>
+        <p>${d.blurb}</p>
+      </button>`;
+    }).join('');
+  };
+  const pickDoodler = (id) => {
+    setSetting('doodler', id);
+    renderCards();
+    game.player.applyDoodler(id);
+    game.player.respawn(game.pickSpawn(game.player));
+    game.onActorSpawned(game.player);
+    game.toast(`PLAYING AS ${DOODLERS[id].name}`);
+  };
+  cards.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-doodler]');
+    if (!btn) return;
+    Sfx.uiClick();
+    pickDoodler(btn.dataset.doodler);
+    startPlaying();
+  });
+
+  $('#btn-play').addEventListener('click', () => { Sfx.uiClick(); renderCards(); show('class'); });
+  $('#btn-class').addEventListener('click', () => { Sfx.uiClick(); renderCards(); show('class'); });
   $('#btn-resume').addEventListener('click', () => { Sfx.uiClick(); startPlaying(); });
   $('#btn-restart').addEventListener('click', () => {
     Sfx.uiClick();
@@ -134,10 +168,12 @@ function main() {
   });
 
   // Clicking the paper (but not a control) resumes, the way every shooter does it.
+  // Not on the start, class or end screens, where a click means "choose something".
   overlay.addEventListener('mousedown', (e) => {
     if (e.target.closest('button, input, label, a')) return;
-    if (!screens.error.classList.contains('hidden')) return;
-    if (!screens.end.classList.contains('hidden')) return;
+    for (const name of ['error', 'end', 'class', 'start']) {
+      if (!screens[name].classList.contains('hidden')) return;
+    }
     startPlaying();
   });
 
