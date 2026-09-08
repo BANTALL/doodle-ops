@@ -1,0 +1,233 @@
+/* Menus are meant to look like the same sketchbook the game is drawn in:
+   paper stock, pencil borders wobbled by an SVG displacement filter, no straight lines. */
+
+:root {
+  --paper: #f5f2e9;
+  --paper-deep: #ece7d9;
+  --ink: #22202b;
+  --ink-soft: rgba(34, 32, 43, 0.55);
+  --red: #c0392f;
+  --font: "Comic Sans MS", "Chalkboard SE", "Segoe Print", "Bradley Hand", "Comic Neue", cursive;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+#gl { z-index: 0; }
+#hud { z-index: 1; pointer-events: none; }
+
+.svg-defs { position: absolute; width: 0; height: 0; }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+.overlay.hidden { display: none; }
+
+.screen { width: 100%; display: grid; place-items: center; }
+.screen.hidden { display: none; }
+
+/* Paper sheet with a torn-ish pencil border. */
+.sheet {
+  position: relative;
+  width: min(660px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 34px 40px 30px;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 14px 10px 16px 8px;
+  filter: url(#wobble);
+  box-shadow: 6px 8px 0 rgba(34, 32, 43, 0.12);
+}
+.sheet-wide { width: min(760px, 100%); }
+
+/* A faint second outline, offset, like the pen went round twice. */
+.sheet::after {
+  content: "";
+  position: absolute;
+  inset: 5px 6px 7px 5px;
+  border: 1.5px solid rgba(34, 32, 43, 0.28);
+  border-radius: 12px 14px 8px 12px;
+  pointer-events: none;
+}
+
+.title {
+  margin: 0 0 6px;
+  font-size: clamp(38px, 8vw, 68px);
+  line-height: 0.95;
+  letter-spacing: 1px;
+  text-align: center;
+  transform: rotate(-1.2deg);
+}
+.title.small { font-size: clamp(28px, 5vw, 42px); margin-bottom: 16px; }
+.title-ops {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 12px 4px;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 8px 12px 8px 14px;
+  transform: rotate(2.4deg);
+}
+
+.subtitle {
+  margin: 0 0 22px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--ink-soft);
+  transform: rotate(0.4deg);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 8px 20px;
+  margin-bottom: 18px;
+}
+.ctrl { display: flex; align-items: baseline; gap: 10px; font-size: 15px; }
+.ctrl span { color: var(--ink-soft); }
+kbd {
+  font-family: var(--font);
+  font-weight: bold;
+  font-size: 13px;
+  padding: 3px 9px 4px;
+  border: 2px solid var(--ink);
+  border-radius: 7px 5px 8px 6px;
+  background: var(--paper-deep);
+  white-space: nowrap;
+  filter: url(#wobble-soft);
+}
+
+.note {
+  margin: 4px 0 20px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  border-left: 4px solid var(--ink);
+  padding-left: 12px;
+  transform: rotate(-0.3deg);
+}
+.fineprint { margin: 12px 0 0; text-align: center; font-size: 12px; color: var(--ink-soft); }
+
+.big-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 14px 20px;
+  font-family: var(--font);
+  font-weight: bold;
+  font-size: 24px;
+  letter-spacing: 1px;
+  color: var(--paper);
+  background: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 12px 8px 14px 9px;
+  cursor: pointer;
+  filter: url(#wobble-soft);
+  transition: transform 0.08s ease;
+}
+.big-button:hover { transform: rotate(-0.8deg) scale(1.015); }
+.big-button:active { transform: rotate(0.4deg) scale(0.985); }
+.big-button.ghost { color: var(--ink); background: transparent; }
+.big-button.ghost:hover { background: var(--paper-deep); }
+.big-button.small { font-size: 16px; padding: 10px 16px; }
+
+.button-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.button-row .big-button { flex: 1 1 160px; width: auto; }
+
+/* ---- settings ---- */
+.settings { display: grid; gap: 12px; margin-bottom: 6px; }
+.setting {
+  display: grid;
+  grid-template-columns: 1fr 200px 56px;
+  align-items: center;
+  gap: 14px;
+  font-size: 15px;
+}
+.setting em { font-style: normal; font-size: 12px; color: var(--ink-soft); }
+.setting output { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.setting.toggle { grid-template-columns: 1fr auto; }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  background: var(--ink);
+  border-radius: 4px;
+}
+input[type="range"]::-moz-range-track { height: 5px; background: var(--ink); border-radius: 4px; }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px; height: 20px;
+  margin-top: -8px;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 50% 46% 52% 48%;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 50% 46% 52% 48%;
+}
+input[type="checkbox"] {
+  appearance: none;
+  width: 26px; height: 26px;
+  border: 3px solid var(--ink);
+  border-radius: 7px 5px 8px 6px;
+  background: var(--paper);
+  cursor: pointer;
+  position: relative;
+  filter: url(#wobble-soft);
+}
+input[type="checkbox"]:checked::after {
+  content: "✕";
+  position: absolute;
+  inset: -6px 0 0;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: bold;
+  color: var(--ink);
+}
+
+/* ---- scores ---- */
+.scores { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 17px; }
+.scores th { text-align: left; font-size: 13px; color: var(--ink-soft); padding-bottom: 6px; border-bottom: 2px solid var(--ink); }
+.scores td { padding: 7px 0; border-bottom: 1px dashed rgba(34,32,43,0.25); }
+.scores td:nth-child(2), .scores td:nth-child(3),
+.scores th:nth-child(2), .scores th:nth-child(3) { text-align: right; width: 74px; }
+.scores tr.me td { color: var(--red); font-weight: bold; }
+
+@media (max-width: 620px) {
+  .sheet { padding: 24px 20px; }
+  .setting { grid-template-columns: 1fr 120px 44px; gap: 8px; font-size: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .big-button { transition: none; }
+}

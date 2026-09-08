@@ -1,0 +1,144 @@
+# DOODLE OPS
+
+A hand-drawn first-person shooter set in a paper backrooms. You against five bots, three
+guns and a knife, in a level where somebody got halfway through colouring it in and
+stopped.
+
+**Play it: https://osnailcyargta-ctrl.github.io/fps/**
+
+No engine, no libraries, no build step. Raw WebGL2 and Canvas2D, about 5k lines,
+everything generated at runtime — there isn't a single image or audio file in the repo.
+
+---
+
+## Controls
+
+| | |
+|---|---|
+| `W A S D` | move |
+| `SPACE` | jump |
+| `MOUSE 1` | shoot / swing |
+| `MOUSE 2` | hold to scope (sniper only — releasing cancels it) |
+| `SCROLL` | switch between knife and gun (`1` / `2` / `Q` also work) |
+| `E` | pick up the weapon you're looking at |
+| `R` | reload |
+| `TAB` | scoreboard |
+| `ESC` | pause and settings |
+
+Mouse sensitivity, a separate scoped sensitivity, FOV, volume, render scale, ink weight,
+bot count and the kill limit all live in the pause menu and persist between sessions.
+
+## Weapons
+
+You carry the knife plus **one** gun. Picking a new gun up drops the one in your hands.
+
+| | damage | rate of fire | magazine | notes |
+|---|---|---|---|---|
+| **Knife** | 42 | fast | — | 1.6× from behind, and you move quicker holding it |
+| **Pistol** | 26 | slow | 12 | the reliable middle |
+| **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
+| **Sniper** | 88 | very slow | 1 | hold right mouse to scope; two body shots or one head |
+
+Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
+a random gun. Guns dropped by the dead fade off the page after about twenty seconds, so the
+crates stay worth opening; guns from crates stay put.
+
+## The bots
+
+They're meant to read as people having a bad day, not as turrets. Three things do most of
+that work:
+
+- **They aim by turning, never by snapping.** Where a bot is facing is the only thing that
+  decides where its bullets go, and that facing chases you through a wandering error that
+  shrinks the longer it holds you. First contact is sloppy; a long duel gets dangerous.
+- **Everything costs a delay.** Spotting you, losing you, getting shot in the back — each
+  one has to be processed before it changes behaviour. A bot cannot answer a shot it hasn't
+  registered yet, which is why you can win a fight by moving first.
+- **They move for their own reasons.** Strafing runs on a lazy timer, they back off to
+  reload, they push when they think they're ahead. They are not reading your bullets and
+  dodging them, and you can feel that they aren't.
+
+The five of them are rolled with different skill, reaction time, turn speed, aggression and
+preferred range, so one is genuinely sharp and one is a liability. They also loot, break
+crates for guns, hunt you by sound, and fight each other — it's a free-for-all, not five
+bots ganging up on the player.
+
+## The look
+
+**Everything is drawn at 12fps. Everything is *played* at 60.**
+
+There are two clocks. The simulation, the camera and your aim run at the full frame rate,
+so the game feels immediate. A separate 12fps clock is the only thing the visuals ever
+sample: bot poses, the viewmodel, tracers, muzzle flashes, shards, and — importantly — the
+random seed that wobbles every line and every fill. Between animation steps the drawing
+holds perfectly still, then snaps to a new wobble. That's the boil you get in hand-drawn
+animation, and here it falls out of the update schedule rather than being faked.
+
+Bots are re-baked into fresh geometry on each animation step, which is also why they cost
+two draw calls each.
+
+The rest of the pipeline:
+
+- **Ink pass.** Every outline is a screen-space quad expanded in the vertex shader, so
+  lines keep a constant pen weight at any distance. Endpoints are jittered by a hash of
+  their own position, which means strokes that share a corner stay joined while they
+  wobble. Real stroke ends overshoot the way a pen does; interior joints stay closed.
+- **Fill pass.** Flat comic shading keyed to which way a face points, with pencil
+  cross-hatching in the shadows sampled in screen space and re-jittered every animation
+  step — so shading looks re-drawn each frame instead of pasted on.
+- **The half-coloured map.** A straight sweep runs across the level, chewed up by
+  medium-scale noise so it never reads as a ruled line. On one side: crayon over the line
+  art. On the other: bare pencil on white paper. The colouring is thresholded against a
+  crayon-coverage texture, so it's solid well inside the region and frays into patches
+  exactly where it stops. Your own gun stays coloured wherever you are, because a white gun
+  against a white floor is unreadable.
+
+## Running it locally
+
+Any static file server will do — ES modules need `http://`, not `file://`:
+
+```sh
+python3 -m http.server 8000
+# then open http://localhost:8000
+```
+
+## Deploying
+
+The repo is already a working site at its root, so either Pages mode works:
+
+- **GitHub Actions** (what `.github/workflows/pages.yml` is for): Settings → Pages →
+  Source → *GitHub Actions*. Pushing to `main` or `claude/doodle-fps-game-bots-vm4ieu`
+  publishes automatically.
+- **Deploy from a branch**: Settings → Pages → Source → *Deploy from a branch*, pick the
+  branch and the `/ (root)` folder. The workflow is then unnecessary.
+
+Every path in the project is relative, so it works fine served from `/fps/`.
+
+## Layout
+
+```
+index.html      shell, menus, settings form
+styles.css      menu chrome (SVG-displaced borders, so even the UI is wobbly)
+src/
+  main.js       boot, menu wiring
+  game.js       match orchestration, the two clocks, combat events
+  renderer.js   draw lists, the three passes
+  shaders.js    all GLSL
+  gl.js         WebGL2 helpers
+  geom.js       fill/ink builders
+  textures.js   paper, hatch, crayon, splats, flashes — all procedural
+  map.js        backrooms generator, collision, raycasts, nav grid
+  bots.js       the AI
+  actors.js     the humanoid rig
+  player.js     movement, look, viewmodel
+  combat.js     weapon state machine, hitscan
+  weapons.js    weapon stats and models
+  entities.js   crates, pickups, decals, particles
+  hud.js        the hand-drawn HUD
+  audio.js      procedural WebAudio SFX
+  input.js      pointer lock, keys, mouse
+  settings.js   persisted settings
+  math.js       vectors, matrices, RNG
+```
+
+Needs a browser with WebGL2 — any current Chrome, Edge, Firefox or Safari.

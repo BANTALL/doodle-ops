@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A hand-drawn first-person shooter set in a paper backrooms. Five bots, three guns and a knife.">
+<meta name="theme-color" content="#f5f2e9">
+<title>DOODLE OPS — paper backrooms FPS</title>
+<link rel="stylesheet" href="./styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>✏️</text></svg>">
+</head>
+<body>
+
+<!-- Displacement filter that gives the menus their wobbly pen-drawn edges. -->
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <filter id="wobble">
+    <feTurbulence type="fractalNoise" baseFrequency="0.019" numOctaves="3" seed="7" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="4.5" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="wobble-soft">
+    <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="21" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="2.4" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<canvas id="gl"></canvas>
+<canvas id="hud"></canvas>
+
+<div id="overlay" class="overlay">
+
+  <!-- ---------------------------------------------------------- start -->
+  <section id="screen-start" class="screen">
+    <div class="sheet">
+      <h1 class="title">DOODLE<span class="title-ops">OPS</span></h1>
+      <p class="subtitle">six pencils, one paper backrooms, nobody gets erased quietly</p>
+
+      <div class="controls-grid">
+        <div class="ctrl"><kbd>W A S D</kbd><span>move</span></div>
+        <div class="ctrl"><kbd>SPACE</kbd><span>jump</span></div>
+        <div class="ctrl"><kbd>MOUSE 1</kbd><span>shoot / swing</span></div>
+        <div class="ctrl"><kbd>MOUSE 2</kbd><span>hold to scope (sniper)</span></div>
+        <div class="ctrl"><kbd>SCROLL</kbd><span>switch knife / gun</span></div>
+        <div class="ctrl"><kbd>E</kbd><span>pick up what you're looking at</span></div>
+        <div class="ctrl"><kbd>R</kbd><span>reload</span></div>
+        <div class="ctrl"><kbd>TAB</kbd><span>scoreboard</span></div>
+        <div class="ctrl"><kbd>ESC</kbd><span>pause &amp; settings</span></div>
+      </div>
+
+      <p class="note">Shoot the crates. They cough up a random gun. Picking one up drops the one you're holding.</p>
+
+      <button id="btn-play" class="big-button">PLAY</button>
+      <p class="fineprint">click anywhere to lock the mouse · needs WebGL2</p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- pause -->
+  <section id="screen-pause" class="screen hidden">
+    <div class="sheet sheet-wide">
+      <h2 class="title small">PAUSED</h2>
+
+      <div class="settings">
+        <div class="setting">
+          <label for="s-sens">Mouse sensitivity</label>
+          <input id="s-sens" type="range" data-setting="sensitivity" min="0.3" max="8" step="0.05">
+          <output data-out="sensitivity"></output>
+        </div>
+        <div class="setting">
+          <label for="s-scopesens">Scoped sensitivity</label>
+          <input id="s-scopesens" type="range" data-setting="scopedSensitivity" min="0.15" max="4" step="0.05">
+          <output data-out="scopedSensitivity"></output>
+        </div>
+        <div class="setting">
+          <label for="s-fov">Field of view</label>
+          <input id="s-fov" type="range" data-setting="fov" min="65" max="105" step="1">
+          <output data-out="fov"></output>
+        </div>
+        <div class="setting">
+          <label for="s-vol">Volume</label>
+          <input id="s-vol" type="range" data-setting="volume" min="0" max="1" step="0.05">
+          <output data-out="volume"></output>
+        </div>
+        <div class="setting">
+          <label for="s-res">Render scale</label>
+          <input id="s-res" type="range" data-setting="resolutionScale" min="0.5" max="1" step="0.05">
+          <output data-out="resolutionScale"></output>
+        </div>
+        <div class="setting">
+          <label for="s-ink">Ink weight</label>
+          <input id="s-ink" type="range" data-setting="inkAmount" min="0.5" max="2" step="0.05">
+          <output data-out="inkAmount"></output>
+        </div>
+        <div class="setting">
+          <label for="s-bots">Bots <em>(new match)</em></label>
+          <input id="s-bots" type="range" data-setting="botCount" min="1" max="8" step="1">
+          <output data-out="botCount"></output>
+        </div>
+        <div class="setting">
+          <label for="s-kills">Kills to win <em>(new match)</em></label>
+          <input id="s-kills" type="range" data-setting="killLimit" min="5" max="50" step="1">
+          <output data-out="killLimit"></output>
+        </div>
+        <div class="setting toggle">
+          <label for="s-invert">Invert vertical look</label>
+          <input id="s-invert" type="checkbox" data-setting="invertY">
+        </div>
+        <div class="setting toggle">
+          <label for="s-fps">Show FPS counter</label>
+          <input id="s-fps" type="checkbox" data-setting="showFps">
+        </div>
+      </div>
+
+      <div class="button-row">
+        <button id="btn-resume" class="big-button">RESUME</button>
+        <button id="btn-restart" class="big-button ghost">NEW MAP</button>
+        <button id="btn-defaults" class="big-button ghost small">RESET SETTINGS</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- end -->
+  <section id="screen-end" class="screen hidden">
+    <div class="sheet">
+      <h2 id="end-title" class="title small">MATCH OVER</h2>
+      <table id="end-scores" class="scores"></table>
+      <div class="button-row">
+        <button id="btn-again" class="big-button">PLAY AGAIN</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- error -->
+  <section id="screen-error" class="screen hidden">
+    <div class="sheet">
+      <h2 class="title small">CAN'T DRAW THIS</h2>
+      <p id="error-text" class="note"></p>
+    </div>
+  </section>
+
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
