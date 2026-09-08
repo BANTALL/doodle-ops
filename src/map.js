@@ -2,7 +2,7 @@
 // what actually gives that "endless office nobody finished" feeling. Also owns collision,
 // raycasting and the nav grid the bots think with.
 
-import { Rng, V, clamp } from './math.js';
+import { Rng, V, clamp, smoothstep } from './math.js';
 import { FillBuilder, InkBuilder } from './geom.js';
 import { MAT } from './renderer.js';
 
@@ -12,6 +12,36 @@ export const WALL_H = 3.15;
 export const CHUNK = 6;
 
 const WALL = 1, OPEN = 0;
+
+// --- ports of the shader's noise, so JS and GLSL agree on where the colouring stops ---
+const fract = (v) => v - Math.floor(v);
+
+function hash21(x, y) {
+  let px = fract(x * 0.1031), py = fract(y * 0.1030), pz = fract(x * 0.0973);
+  const d = px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+  px = fract(px + d); py = fract(py + d); pz = fract(pz + d);
+  return fract((px + py) * pz);
+}
+
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash21(xi, yi), b = hash21(xi + 1, yi);
+  const c = hash21(xi, yi + 1), d = hash21(xi + 1, yi + 1);
+  const top = a + (b - a) * ux, bot = c + (d - c) * ux;
+  return top + (bot - top) * uy;
+}
+
+function fbm2(x, y) {
+  let s = 0, a = 0.5, n = 0;
+  for (let i = 0; i < 4; i++) {
+    s += vnoise(x, y) * a;
+    n += a; a *= 0.5;
+    x = x * 2.03 + 17.1; y = y * 2.03 + 17.1;
+  }
+  return s / n;
+}
 
 export class GameMap {
   constructor(seed = 1, w = 30, h = 30) {
@@ -565,6 +595,24 @@ export class GameMap {
         }
       }
     }
+  }
+
+  // ------------------------------------------------------------ colouring
+
+  /**
+   * JS mirror of colorMask() in the fill shader: 0 = left as line art, 1 = coloured in.
+   *
+   * Characters sample this once at their feet and ease toward it, so a fighter crossing
+   * the border drains of colour over about a second instead of switching per-pixel as
+   * their body passes through the boundary.
+   */
+  colorAmountAt(x, z) {
+    const d = ((x - this.colorOrigin[0]) * this.colorDir[0] +
+               (z - this.colorOrigin[1]) * this.colorDir[1]) * this.colorSlope;
+    const n = fbm2(x * 0.055, z * 0.055) - 0.5;
+    const fine = fbm2(x * 0.23, z * 0.23) - 0.5;
+    const m = d + n * 1.45 + fine * 0.30;
+    return smoothstep(-0.13, 0.13, m);
   }
 
   // ------------------------------------------------------------ culling

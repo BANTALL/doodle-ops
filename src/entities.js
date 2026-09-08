@@ -2,7 +2,7 @@
 // holes, tracers, muzzle flashes, paper shards. Cosmetic motion is stepped on the 12fps
 // animation clock so it flip-books along with the characters.
 
-import { FillBuilder, InkBuilder, pushOrientedBox } from './geom.js';
+import { FillBuilder, InkBuilder, pushOrientedBox, shapeMeshes } from './geom.js';
 import { MAT } from './renderer.js';
 import { M4, V, clamp, TAU } from './math.js';
 import { WEAPONS } from './weapons.js';
@@ -11,6 +11,7 @@ const GRAVITY = 15.5;
 const ANIM_DT = 1 / 12;
 const PICKUP_TTL = 24;      // seconds a dropped gun lies around before it fades off the page
 const PICKUP_BLINK = 4;     // last few seconds, it flickers like it's being erased
+const HEART_TTL = 30;
 
 function buildCrateMesh(gl) {
   const f = new FillBuilder(), i = new InkBuilder();
@@ -22,6 +23,23 @@ function buildCrateMesh(gl) {
     pushOrientedBox(f, i, { pos: [dx, 0.06, dz], size: [sx, 0.16, sz], mat: MAT.TRIM, inkWidth: 1.3 });
   }
   return { fill: f.toMesh(gl), ink: i.toMesh(gl) };
+}
+
+/**
+ * A drawn heart. The outline is the classic parametric heart curve, started at the bottom
+ * tip - the shape is star-shaped about that point, so a triangle fan from it fills
+ * correctly despite the notch at the top.
+ */
+function buildHeartMesh(gl) {
+  const pts = [];
+  const N = 34;
+  for (let k = 0; k < N; k++) {
+    const t = Math.PI + (k / N) * TAU;
+    const x = 16 * Math.sin(t) ** 3;
+    const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    pts.push([x * 0.0105, y * 0.0105 + 0.055]);
+  }
+  return shapeMeshes(gl, pts, MAT.RED, 2.4, 0.06);
 }
 
 function buildShardMesh(gl) {
@@ -90,6 +108,7 @@ export class Entities {
     this.models = weaponModels;
     this.crateMesh = buildCrateMesh(gl);
     this.shardMesh = buildShardMesh(gl);
+    this.heartMesh = buildHeartMesh(gl);
 
     this.crates = [];
     this.pickups = [];
@@ -143,7 +162,7 @@ export class Entities {
     const p = V.clone(pos);
     p.y = Math.max(0.22, p.y);
     this.pickups.push({
-      gunId, pos: p,
+      kind: 'gun', gunId, pos: p,
       vel: kick ? V.make(this.rng.range(-1.6, 1.6), this.rng.range(1.2, 2.6), this.rng.range(-1.6, 1.6)) : V.make(0, 0, 0),
       ammo: ammo ?? WEAPONS[gunId].mag,
       reserve: reserve ?? Math.round(WEAPONS[gunId].reserve * 0.35),
@@ -157,6 +176,19 @@ export class Entities {
       const i = this.pickups.findIndex((q) => q.ttl !== Infinity);
       this.pickups.splice(i >= 0 ? i : 0, 1);
     }
+  }
+
+  /** Heart drop. Walked over rather than pressed for - it's a top-up, not a choice. */
+  spawnHeart(pos) {
+    this.pickups.push({
+      kind: 'heart', gunId: null,
+      pos: V.make(pos.x + this.rng.range(-0.4, 0.4), Math.max(0.30, pos.y), pos.z + this.rng.range(-0.4, 0.4)),
+      vel: V.make(this.rng.range(-1.2, 1.2), this.rng.range(1.6, 2.8), this.rng.range(-1.2, 1.2)),
+      ammo: 0, reserve: 0, grounded: false,
+      spin: this.rng.range(0, TAU),
+      ttl: HEART_TTL,
+      highlight: 0,
+    });
   }
 
   addDecal(pos, normal, size = 0.34) {
@@ -323,8 +355,9 @@ export class Entities {
 
     // Dropped weapons: hover, turn, and lean in a way that reads as "pick me up".
     for (const p of this.pickups) {
-      const model = this.models.models[p.gunId];
-      if (!model) continue;
+      const isHeart = p.kind === 'heart';
+      const model = isHeart ? null : this.models.models[p.gunId];
+      if (!isHeart && !model) continue;
       r.stats.props++;
       if (!fr.sphere(p.pos.x, p.pos.y + 0.15, p.pos.z, 1.1)) continue;
       r.stats.propsDrawn++;
@@ -337,9 +370,18 @@ export class Entities {
       M4.compose(m, this._tmp, yaw, 0.22, 0.12, 1, 1, 1);
       const hi = p.highlight;
       const opts = { objSeed: p.spin * 9.3, widthScale: 1 + hi * 1.6 };
-      r.fill(model.body.fill, m, opts);
-      r.ink(model.body.ink, m, opts);
-      if (model.moving) { r.fill(model.moving.fill, m, opts); r.ink(model.moving.ink, m, opts); }
+      if (isHeart) {
+        // Hearts pulse rather than tumble, so they read as pickups and not as weapons.
+        const beat = 1 + Math.sin(bobT * 5.0) * 0.09;
+        M4.compose(m, this._tmp2 ? V.set(this._tmp2, p.pos.x, y + 0.06, p.pos.z) : (this._tmp2 = V.make(p.pos.x, y + 0.06, p.pos.z)),
+          yaw, 0, 0, beat, beat, beat);
+        r.fill(this.heartMesh.fill, m, opts);
+        r.ink(this.heartMesh.ink, m, opts);
+      } else {
+        r.fill(model.body.fill, m, opts);
+        r.ink(model.body.ink, m, opts);
+        if (model.moving) { r.fill(model.moving.fill, m, opts); r.ink(model.moving.ink, m, opts); }
+      }
       // Pencil smudge on the floor so the item is grounded in the drawing.
       V.set(this._tmp, p.pos.x, 0.012, p.pos.z);
       decalMatrix(m, this._tmp, { x: 0, y: 1, z: 0 }, 0.85 + hi * 0.25, p.spin);

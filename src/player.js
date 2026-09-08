@@ -27,9 +27,10 @@ const STRAFE_BLEED = 0.10;          // fraction of the *boost* a sidestep costs
 const STRAFE_BLEED_EVERY = 0.4;     // ...applied this often while you hold it
 const STRAFE_FAST = 4.2;            // only counts once you're actually moving
 
-// Knife idle: after this long standing around, start playing with it.
+// Knife idle: stand still this long and you spin it, for this long, then rest and repeat.
 const IDLE_TWIRL_AFTER = 3.0;
-const TWIRL_SPEED = 1.15;           // rotations per second
+const TWIRL_DURATION = 2.0;
+const TWIRL_TURNS = 2;              // whole turns per trick, so it lands where it started
 
 /** Matrix at `from` whose +Z axis points at `toward`. Used to aim the forearms. */
 function aimMatrix(out, from, toward) {
@@ -81,7 +82,8 @@ export class Player {
     this.vel = V.make(0, 0, 0);
     this.yaw = 0;
     this.pitch = 0;
-    this.health = 100;
+    this.maxHealth = 100;
+    this.health = this.maxHealth;
     this.alive = true;
     this.kills = 0;
     this.deaths = 0;
@@ -105,7 +107,7 @@ export class Player {
     this.idleTimer = 0;
     this.twirlActive = false;
     this.twirlBlend = 0;
-    this.twirlPhase = 0;
+    this.twirlT = 0;
 
     // viewmodel animation state, only touched on animation steps
     this.vm = {
@@ -147,7 +149,7 @@ export class Player {
   respawn(pos) {
     V.copy(this.pos, pos);
     V.set(this.vel, 0, 0, 0);
-    this.health = 100;
+    this.health = this.maxHealth;
     this.alive = true;
     this.deathTimer = 0;
     this.punchPitch = this.punchYaw = 0;
@@ -158,6 +160,7 @@ export class Player {
     this.idleTimer = 0;
     this.twirlActive = false;
     this.twirlBlend = 0;
+    this.twirlT = 0;
   }
 
   /** Speed multiplier from running momentum. */
@@ -330,14 +333,17 @@ export class Player {
       if (lo.pendingMelee <= 0) this._meleeHit();
     }
 
-    // Idle knife play: stand still holding the knife for a few seconds and you start
-    // spinning it on a finger. Any input at all puts a stop to it.
+    // Idle knife play: stand still holding the knife and every few seconds you flip it
+    // over in your hand, then let it rest again. One trick, then a pause - a knife that
+    // never stops rotating reads as a broken animation, not as fidgeting.
     const speed = Math.hypot(this.vel.x, this.vel.z);
     const idleOk = lo.isMelee && lo.cooldown <= 0 && lo.drawT <= 0 && speed < 1.2 && !input.buttons[0];
     if (idleOk) this.idleTimer += dt; else this.idleTimer = 0;
-    this.twirlActive = idleOk && this.idleTimer >= IDLE_TWIRL_AFTER;
-    this.twirlBlend = damp(this.twirlBlend, this.twirlActive ? 1 : 0, 7, dt);
-    if (this.twirlBlend > 0.001) this.twirlPhase += dt * TWIRL_SPEED;
+    const period = IDLE_TWIRL_AFTER + TWIRL_DURATION;
+    const cyc = this.idleTimer % period;
+    this.twirlActive = idleOk && this.idleTimer >= IDLE_TWIRL_AFTER && cyc >= IDLE_TWIRL_AFTER;
+    this.twirlT = this.twirlActive ? (cyc - IDLE_TWIRL_AFTER) / TWIRL_DURATION : 0;
+    this.twirlBlend = damp(this.twirlBlend, this.twirlActive ? 1 : 0, 12, dt);
 
     const wantFire = def.auto ? input.buttons[0] : input.buttonPressed[0];
     if (wantFire) {
@@ -388,6 +394,7 @@ export class Player {
     const dir = this.aimDir(this._dir);
     let best = null, bestScore = 0.955;   // ~17 degrees off-centre
     for (const p of game.entities.pickups) {
+      if (p.kind === 'heart') continue;   // hearts are walked over, not prompted for
       const dx = p.pos.x - eye.x, dy = p.pos.y - eye.y, dz = p.pos.z - eye.z;
       const d = Math.hypot(dx, dy, dz);
       if (d > PICKUP_RANGE) continue;
@@ -495,6 +502,7 @@ export class Player {
 
     const drawTime = curDef.drawTime;
     const drawT = lo.drawT > 0 ? Math.min(drawTime, lo.drawT + back) : 0;
+    const reloadT = lo.reloadT > 0 ? Math.min(curDef.reload, lo.reloadT + back) : 0;
     const swapping = drawT > 0 && !!lo.swapFrom;
     const swapP = swapping ? 1 - drawT / drawTime : 1;
 
@@ -507,7 +515,7 @@ export class Player {
     const scope = curDef.scope ? lo.scopeT : 0;
     const bobX = Math.sin(vm.bobPhase) * 0.020 * vm.moveAmt;
     const bobY = -Math.abs(Math.cos(vm.bobPhase)) * 0.018 * vm.moveAmt;
-    const reload = lo.reloadT > 0 ? 1 - Math.abs(1 - 2 * (1 - lo.reloadT / curDef.reload)) : 0;
+    const reload = reloadT > 0 ? 1 - Math.abs(1 - 2 * (1 - reloadT / curDef.reload)) : 0;
     const kick = vm.kick;
 
     let px = hold.pos[0] + vm.swayX + bobX;
@@ -572,19 +580,28 @@ export class Player {
       }
     }
 
-    // ---- idle: spinning the knife on a finger ----
+    // ---- idle: flipping the knife over in your hand ----
+    let spinAdd = 0;
     if (this.twirlBlend > 0.001 && def.kind === 'melee' && !swapping && lo.cooldown <= 0) {
       const tw = this.twirlBlend;
-      const ph = (this.twirlPhase - back * TWIRL_SPEED) * TAU;
-      rx += ph * tw;
-      // Brought inboard and pushed out slightly while you play with it, so the whole
-      // knife stays on screen through the spin.
-      px = lerp(px, 0.140, tw) + Math.cos(ph) * 0.028 * tw;
-      py = lerp(py, -0.105, tw) + Math.sin(ph) * 0.038 * tw;
-      pz = lerp(pz, -0.50, tw);
-      rz += Math.sin(ph * 0.5) * 0.26 * tw;
-      smear = Math.max(smear, 0.55 * tw);
+      // Rewind the trick's own progress for smear ghosts.
+      const t = clamp(this.twirlT - back / TWIRL_DURATION, 0, 1);
+      // Eased so it winds up, whips round and is caught - and it lands on a whole number
+      // of turns, so the knife finishes exactly where it started instead of snapping back.
+      const e = smoothstep(0, 1, t);
+      spinAdd = e * TAU * TWIRL_TURNS * tw;
+      const swell = Math.sin(t * Math.PI);       // peaks mid-trick
+      // Held out and back a little while it goes round, so the trick is legible without
+      // the hand taking over a third of the screen.
+      px = lerp(px, 0.205, tw);
+      py = lerp(py, -0.105, tw) + swell * 0.028 * tw;
+      pz = lerp(pz, -0.62, tw);
+      ry += 0.30 * tw;
+      rz += (0.20 + Math.sin(t * TAU) * 0.16) * tw;
+      smear = Math.max(smear, swell * 0.5 * tw);
     }
+    const handRx = rx;      // the hand holds still; only the knife goes round
+    rx += spinAdd;
 
     if (scope > 0 && !swapping) {
       const ads = ADS[id] ?? { pos: hold.pos, rot: hold.rot };
@@ -600,6 +617,7 @@ export class Player {
     out.px = px; out.py = py; out.pz = pz;
     out.rx = rx; out.ry = ry; out.rz = rz;
     out.scale = scale; out.hands = hands; out.smear = smear;
+    out.handRx = handRx;
     out.reload = reload; out.scope = scope;
     return out;
   }
@@ -610,8 +628,12 @@ export class Player {
     const lo = this.loadout;
     if (lo.def.scope && lo.scopeT > 0.93) return;   // fully scoped: the reticle takes over
 
+    // Everything here is sampled at the last 12fps step, never at the current instant.
+    // The knife swing in particular was running at the display rate, which made it the
+    // one thing on screen that didn't move on twelves.
+    const lag = this.game.animLag;
     const scratch = this._poseScratch;
-    const main = this._vmPose(0, scratch[0]);
+    const main = this._vmPose(lag, scratch[0]);
     if (!this.game.weapons.models[main.id]) return;
 
     // Ghost outlines trail the real weapon along its own motion. Hand-drawn animation
@@ -620,7 +642,7 @@ export class Player {
     if (main.smear > 0.06) {
       const ghosts = main.smear > 0.65 ? 3 : 2;
       for (let k = ghosts; k >= 1; k--) {
-        const g = this._vmPose(k * 0.020, scratch[k]);
+        const g = this._vmPose(lag + k * (1 / 12) * 0.33, scratch[k]);
         if (this.game.weapons.models[g.id]) {
           this._drawWeapon(r, g, clamp(main.smear, 0, 1) * (0.34 / k), true);
         }
@@ -655,15 +677,19 @@ export class Player {
     if (pose.hands) {
       const hands = this.game.weapons;
       const local = this._m3;
-      const gripWorld = applyMat(m, pose.hold.grip);
-      M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.rx + 0.35, pose.rz, 1, 1, 1);
+      // Hands are placed from a matrix without the idle spin in it, so the knife turns
+      // inside a steady hand rather than the whole fist cartwheeling with it.
+      const mHand = M4.compose(this._m4 ?? (this._m4 = M4.create()),
+        { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.handRx, pose.rz, s, s, s);
+      const gripWorld = applyMat(mHand, pose.hold.grip);
+      M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.handRx + 0.35, pose.rz, 1, 1, 1);
       r.vmFill(hands.hand.fill, local, opts);
       r.vmInk(hands.hand.ink, local, opts);
       this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22]);
 
       if (pose.hold.support && pose.scope < 0.8) {
-        const sw = applyMat(m, pose.hold.support);
-        M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.rx + 0.5, pose.rz, 1, 1, 1);
+        const sw = applyMat(mHand, pose.hold.support);
+        M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.handRx + 0.5, pose.rz, 1, 1, 1);
         r.vmFill(hands.hand.fill, local, opts);
         r.vmInk(hands.hand.ink, local, opts);
         this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22]);
@@ -692,7 +718,7 @@ function makePose() {
   return {
     id: 'pistol', def: null, hold: null,
     px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0,
-    scale: 1, hands: true, smear: 0, reload: 0, scope: 0,
+    scale: 1, hands: true, smear: 0, reload: 0, scope: 0, handRx: 0,
   };
 }
 

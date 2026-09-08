@@ -46,7 +46,7 @@ class CmdPool {
 
 const makeMeshCmd = () => ({
   mesh: null, model: M4.create(), nrm: M3.create(),
-  override: [0, 0, 0, 0], objSeed: 0, widthScale: 1, alpha: 1,
+  override: [0, 0, 0, 0], objSeed: 0, widthScale: 1, alpha: 1, colorAmt: -1,
 });
 const makeQuadCmd = () => ({
   tex: null, model: M4.create(), tint: [0, 0, 0, 1],
@@ -165,6 +165,7 @@ export class Renderer {
     c.objSeed = opts?.objSeed ?? 0;
     c.widthScale = opts?.widthScale ?? 1;
     c.alpha = opts?.alpha ?? 1;
+    c.colorAmt = opts?.colorAmt ?? -1;
   }
 
   fill(mesh, model, opts) { this._pushMesh(this.fills, mesh, model, opts); }
@@ -218,12 +219,15 @@ export class Renderer {
 
   _runFills(pool, p) {
     const gl = this.gl;
+    let lastColor = -999;
     for (const c of pool) {
+      if (c.colorAmt !== lastColor) { p.set1f('uEntityColor', c.colorAmt); lastColor = c.colorAmt; }
       p.setMat4('uModel', c.model).setMat3('uNormalMat', c.nrm)
         .set4f('uOverride', c.override[0], c.override[1], c.override[2], c.override[3])
         .set1f('uObjSeed', c.objSeed);
       c.mesh.draw(gl.TRIANGLES);
     }
+    p.set1f('uEntityColor', -1);
   }
 
   _setInkFrameUniforms(p, view, proj, depthBias) {

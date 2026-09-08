@@ -16,7 +16,7 @@
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT } from './combat.js';
 import { WEAPONS, MUZZLE, randomGunId } from './weapons.js';
-import { CharacterRig, weaponTransform, SHIRT_MATS } from './actors.js';
+import { CharacterRig, SHIRT_MATS } from './actors.js';
 import { M4, V, Rng, clamp, lerp, damp, dirFrom, yawOf, angleTo, wrapAngle, approachAngle, DEG, TAU } from './math.js';
 import { Sfx } from './audio.js';
 
@@ -77,7 +77,8 @@ export class Bot {
     this.vel = V.make(0, 0, 0);
     this.yaw = r.range(-Math.PI, Math.PI);
     this.pitch = 0;
-    this.health = 100;
+    this.maxHealth = 100;
+    this.health = this.maxHealth;
     this.alive = true;
     this.onGround = true;
     this.kills = 0; this.deaths = 0;
@@ -126,6 +127,9 @@ export class Bot {
     this.meleeAnim = 0;
     this.hurtAnim = 0;
     this.rigDirty = true;
+    // Eased toward the map's colour mask, so crossing the border drains the colour out of
+    // a bot over about a second rather than wiping across their body per pixel.
+    this.colorAmt = 1;
 
     this._m = M4.create();
     this._dir = V.make();
@@ -140,7 +144,7 @@ export class Bot {
   respawn(pos) {
     V.copy(this.pos, pos);
     V.set(this.vel, 0, 0, 0);
-    this.health = 100;
+    this.health = this.maxHealth;
     this.alive = true;
     this.deathTimer = 0;
     this.state = STATE.PATROL;
@@ -312,6 +316,7 @@ export class Bot {
     const mine = gunScore(this.loadout.gun);
     let best = null, bestD = 34;
     for (const p of game.entities.pickups) {
+      if (p.kind === 'heart') continue;
       const score = gunScore(p.gunId);
       const worth = score > mine + 0.01 || (!this.loadout.hasGun) ||
         (p.gunId === this.loadout.gun && this.loadout.reserve < WEAPONS[p.gunId].reserve * 0.3);
@@ -613,6 +618,7 @@ export class Bot {
   update(dt, now) {
     if (!this.alive) { this.deathTimer += dt; return; }
 
+    this.colorAmt = damp(this.colorAmt, this.game.map.colorAmountAt(this.pos.x, this.pos.z), 1.8, dt);
     this.flinch = Math.max(0, this.flinch - dt * 2.2);
     this.hurtAnim = Math.max(0, this.hurtAnim - dt * 3);
     this.alertTimer = Math.max(0, this.alertTimer - dt);
@@ -700,14 +706,16 @@ export class Bot {
       meleeT: this.meleeAnim,
       reloadT: this.loadout.reloadT > 0 ? 1 - Math.abs(1 - 2 * (1 - this.loadout.reloadT / this.loadout.def.reload)) : 0,
       crouch: 0,
+      twoHanded: this.loadout.hasGun && !this.loadout.isMelee,
     });
   }
 
   render(r, cam) {
     const m = this._m;
     const seed = this.index * 17.3;
+    const tint = { objSeed: seed, colorAmt: this.colorAmt };
     M4.compose(m, this.animPos, this.animYaw, 0, 0, 1, 1, 1);
-    r.fill(this.rig.fill, m, { objSeed: seed });
+    r.fill(this.rig.fill, m, tint);
     r.ink(this.rig.ink, m, { objSeed: seed });
 
     // Pencil smudge underneath: without it a character reads as pasted onto the page.
@@ -721,12 +729,19 @@ export class Bot {
     // Weapon in hand, aimed along the same line the bullets take.
     const lo = this.loadout;
     const model = this.game.weapons.models[lo.id];
-    if (model) {
-      const held = weaponTransform(m, this.animPos, this.animYaw, this.animPitch * (0.35 + 0.6 * this.aimAmt),
-        0.20 + this.aimAmt * 0.14, 1.24 + this.aimAmt * 0.16, 0.21);
-      r.fill(model.body.fill, held, { objSeed: seed + 3 });
+    const g = this.rig.grip;
+    if (model && g) {
+      // Weapon rides the same grip point the arms were solved to reach.
+      const cy = Math.cos(this.animYaw), sy = Math.sin(this.animYaw);
+      V.set(this._tmp,
+        this.animPos.x + cy * g[0] + sy * g[2],
+        this.animPos.y + g[1],
+        this.animPos.z - sy * g[0] + cy * g[2]);
+      const held = M4.compose(m, this._tmp, this.animYaw, this.rig.gripPitch, 0, 1, 1, 1);
+      const wOpts = { objSeed: seed + 3, colorAmt: this.colorAmt };
+      r.fill(model.body.fill, held, wOpts);
       r.ink(model.body.ink, held, { objSeed: seed + 3 });
-      if (model.moving) { r.fill(model.moving.fill, held, { objSeed: seed + 3 }); r.ink(model.moving.ink, held, { objSeed: seed + 3 }); }
+      if (model.moving) { r.fill(model.moving.fill, held, wOpts); r.ink(model.moving.ink, held, { objSeed: seed + 3 }); }
 
       if (this.flashFrames > 0 && lo.def.kind === 'gun') {
         const mz = MUZZLE[lo.id];

@@ -108,6 +108,44 @@ float stripeLine(float p, float widthPx, float fadeAt){
   return v * (1.0 - smoothstep(fadeAt * 0.4, fadeAt, d));
 }
 
+float gridLine(vec2 p, float widthPx, float fadeAt);
+float stripeLine(float p, float widthPx, float fadeAt);
+
+/**
+ * Hand-drawn grid. The lines wander (a low-frequency warp) and break into strokes (a
+ * high-frequency modulation), so floors and ceilings read as ruled by hand rather than
+ * printed. Built on gridLine, so it inherits its constant pen weight and distance fade.
+ */
+float sketchGrid(vec2 p, float widthPx, float fadeAt){
+  vec2 w = vec2(fbm2(p * 1.6), fbm2(p * 1.6 + 31.7)) - 0.5;
+  float v = gridLine(p + w * 0.10, widthPx, fadeAt);
+  return clamp(v * (0.45 + 0.85 * vnoise(p * 8.0)), 0.0, 1.0);
+}
+
+/** Same idea for a single-axis stripe. */
+float sketchStripe(float p, float widthPx, float fadeAt, float seed){
+  float w = (vnoise(vec2(p * 1.3, seed)) - 0.5) * 0.12;
+  return stripeLine(p + w, widthPx, fadeAt) * (0.5 + 0.8 * vnoise(vec2(p * 7.0, seed + 4.0)));
+}
+
+/**
+ * Scattered short pencil dashes, one per cell of p, each at its own angle - the scribbled
+ * tooth that keeps a big flat floor from reading as a solid fill.
+ */
+float dashes(vec2 p, float density){
+  vec2 d = max(fwidth(p), vec2(1e-6));
+  float fade = 1.0 - smoothstep(0.06, 0.20, max(d.x, d.y));
+  if (fade <= 0.001) return 0.0;
+  vec2 cell = floor(p);
+  if (hash21(cell) > density) return 0.0;
+  float a = hash21(cell + 3.0) * 6.2831;
+  vec2 dir = vec2(cos(a), sin(a));
+  vec2 rel = fract(p) - 0.5 - (vec2(hash21(cell + 7.0), hash21(cell + 13.0)) - 0.5) * 0.45;
+  float t = clamp(dot(rel, dir), -0.20, 0.20);
+  float px = max(d.x, d.y);
+  return (1.0 - smoothstep(px * 0.6, px * 1.9, length(rel - dir * t))) * fade;
+}
+
 float gridLine(vec2 p, float widthPx, float fadeAt){
   // Measure the distance to the nearest line in *pixels* rather than in units. A grid
   // drawn in unit space swells into fat bands at grazing angles; this one stays a
@@ -135,6 +173,7 @@ uniform vec3 uEye;
 uniform vec3 uMaskOffset;   // lets eye-space geometry (the viewmodel) sample the world's colour mask
 uniform float uAoEnable;
 uniform float uForceColor;  // 1 = always coloured, regardless of which half of the map we're in
+uniform float uEntityColor; // >= 0 overrides the mask with a single value for the whole object
 
 out vec4 fragColor;
 
@@ -154,7 +193,11 @@ void main(){
 
   // The viewmodel is always coloured in. Letting your own gun go white in the uncoloured
   // half looked lovely and made it impossible to read against the floor.
-  float colored = max(colorMask(vWorld.xz + uMaskOffset.xz), uForceColor);
+  // Characters pass a single eased value for their whole body; the world samples the mask
+  // per fragment. Fading a body per-pixel as it crosses looked like it was being wiped.
+  float colored = uEntityColor >= 0.0
+    ? uEntityColor
+    : max(colorMask(vWorld.xz + uMaskOffset.xz), uForceColor);
   // Threshold the mask against the crayon coverage: solid colour well inside the region,
   // and a frayed, patchy edge exactly where the colouring stops.
   float colorAmt = smoothstep(cover * 0.62, cover * 0.62 + 0.30, colored);
@@ -164,20 +207,29 @@ void main(){
   vec3 base = mix(uPaperColor, waxed, colorAmt);
 
   // ---- surface detail ----------------------------------------------------
+  // Every repeating pattern here is derivative-aware and drawn by hand: past the point
+  // where one period is about a pixel wide it fades out, which is what stops grazing
+  // angles turning the ceiling into moire streaks.
   if (mat == 0 || mat == 5) {
-    // Wallpaper: faint vertical stripe, drawn not printed.
-    float stripe = smoothstep(0.44, 0.5, abs(fract(vUv.x * 1.05) - 0.5));
-    base *= 1.0 - stripe * 0.038 * (0.4 + colorAmt);
+    // Wallpaper: a wandering vertical stripe, plus a skirting line at the floor.
+    float stripe = sketchStripe(vUv.x * 1.05, 1.3, 0.34, 2.0);
+    base *= 1.0 - stripe * 0.055 * (0.4 + colorAmt);
+    float skirt = 1.0 - smoothstep(0.10, 0.16, abs(vWorld.y - 0.13));
+    base = mix(base, base * 0.80, skirt * 0.5);
   } else if (mat == 1) {
-    // Carpet: stippled tooth.
+    // Carpet, drawn: wandering tile seams plus a field of pencil dashes for the pile.
     float stip = vnoise(vUv * 7.0) * 0.6 + vnoise(vUv * 19.0) * 0.4;
     base *= 0.965 + stip * 0.07;
+    float seam = sketchGrid(vUv * 0.278, 1.5, 0.30);
+    base = mix(base, mix(uInkColor, base * 0.55, 0.45), seam * 0.55);
+    float pile = dashes(vUv * 1.7, 0.30);
+    base = mix(base, mix(uInkColor, base * 0.6, 0.5), pile * 0.28);
   } else if (mat == 2) {
-    // Ceiling tiles.
-    // Ceiling tiles: a proper drawn grid, since the ceiling is otherwise a blank field.
-    vec2 g = abs(fract(vUv * 0.5 + 0.25) - 0.5);
-    float grid = smoothstep(0.455, 0.492, max(g.x, g.y));
+    // Ceiling tiles, also ruled by hand, with a few stipple marks per panel.
+    float grid = sketchGrid(vUv * 0.5, 1.6, 0.30);
     base = mix(base, uInkColor, grid * 0.34);
+    float speck = dashes(vUv * 1.1, 0.18);
+    base = mix(base, mix(uInkColor, base * 0.6, 0.5), speck * 0.20);
   }
 
   // ---- light -> pencil hatching -----------------------------------------

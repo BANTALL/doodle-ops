@@ -19,6 +19,7 @@ export const ANIM_HZ = 12;
 const ANIM_DT = 1 / ANIM_HZ;
 const RESPAWN_DELAY = 2.6;
 const BOT_RESPAWN_DELAY = 3.2;
+export const HEART_HEAL = 2;      // a heart is a small top-up, not a medkit
 
 export class Game {
   constructor({ glCanvas, hudCanvas, ui }) {
@@ -214,6 +215,8 @@ export class Game {
     this.player.update(dt, this.input, now);
     for (const b of this.bots) b.update(dt, now);
     this.entities.update(dt);
+    this.collectHearts(this.player);
+    for (const b of this.bots) this.collectHearts(b);
     if (this.impact.t > 0) this.impact.t = Math.max(0, this.impact.t - dt);
 
     // Respawns.
@@ -249,6 +252,9 @@ export class Game {
     V.norm(c.up, c.up);
     V.scale(c.fwd, c.fwd, -1);   // billboards face the camera
   }
+
+  /** Seconds elapsed since the last 12fps animation step. */
+  get animLag() { return this._accumAnim; }
 
   animStep() {
     this.animFrame++;
@@ -315,6 +321,22 @@ export class Game {
     const headroom = WALL_H - BODY_HEIGHT;
     if (a.pos.y > headroom) { a.pos.y = headroom; if (a.vel.y > 0) a.vel.y = 0; }
     return blocked;
+  }
+
+  /** Hearts are walked over, not picked up with a key - by anyone, bots included. */
+  collectHearts(a) {
+    if (!a.alive || a.health >= a.maxHealth) return;
+    const list = this.entities.pickups;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (p.kind !== 'heart') continue;
+      if (V.distXZ(a.pos, p.pos) > 1.15 || Math.abs(p.pos.y - a.pos.y) > 1.8) continue;
+      a.health = Math.min(a.maxHealth, a.health + HEART_HEAL);
+      this.entities.removePickup(p);
+      Sfx.pickup(a.isPlayer ? 0 : V.dist(a.pos, this.player.pos));
+      if (a.isPlayer) this.toast(`+${HEART_HEAL} HP`);
+      return;
+    }
   }
 
   /** Something loud happened. Bots within range go and look. */
@@ -393,6 +415,8 @@ export class Game {
     const gun = randomGunId(this.rng);
     const p = V.make(crate.pos.x, crate.pos.y + 0.2, crate.pos.z);
     this.entities.spawnPickup(gun, p, undefined, undefined, true, true);
+    // Most crates also cough up a heart alongside the gun.
+    if (this.rng.chance(0.75)) this.entities.spawnHeart(p);
     if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED A ${WEAPONS[gun].name}`);
   }
 

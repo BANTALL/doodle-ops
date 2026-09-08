@@ -28,6 +28,71 @@ function rot(p, rx, ry, rz) {
 }
 
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+const norm3 = (a) => { const l = len3(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/**
+ * Box spanning two points. Solves the euler pair that maps the box's local -Y onto the
+ * a -> b direction, matching the rotation order pushOrientedBox uses.
+ */
+function boneTo(f, i, a, b, thick, mat) {
+  const d = sub(b, a);
+  const L = len3(d);
+  if (L < 1e-4) return b;
+  const u = mul(d, 1 / L);
+  const rx = Math.acos(clamp(-u[1], -1, 1));
+  const sx = Math.sqrt(Math.max(1e-6, 1 - u[1] * u[1]));
+  const ry = Math.atan2(-u[0] / sx, -u[2] / sx);
+  pushOrientedBox(f, i, {
+    pos: mul(add(a, b), 0.5), size: [thick, L, thick * 0.92],
+    rot: [rx, ry, 0], mat, inkWidth: IW,
+  });
+  return b;
+}
+
+/**
+ * Two-bone IK. Returns the elbow that puts the hand on `target`, bent toward `pole`.
+ * This is what stops the bots tucking a rifle under one armpit: instead of posing the
+ * arms and hoping the gun lands somewhere sensible, the gun's grip is decided first and
+ * the arms are solved to reach it - the same way the player's hands are placed.
+ */
+function ikElbow(shoulder, target, upperLen, lowerLen, pole) {
+  let d = sub(target, shoulder);
+  let L = len3(d);
+  const maxL = (upperLen + lowerLen) * 0.995;
+  if (L > maxL) { d = mul(d, maxL / L); L = maxL; }
+  if (L < 1e-4) { d = [0, -1e-4, 0]; L = 1e-4; }
+  const dir = mul(d, 1 / L);
+  const cosA = clamp((upperLen * upperLen + L * L - lowerLen * lowerLen) / (2 * upperLen * L), -1, 1);
+  const a = Math.acos(cosA);
+  let perp = sub(pole, mul(dir, dot3(pole, dir)));
+  if (len3(perp) < 1e-4) perp = sub([0, -1, 0], mul(dir, dot3([0, -1, 0], dir)));
+  if (len3(perp) < 1e-4) perp = [1, 0, 0];
+  perp = norm3(perp);
+  return add(shoulder, add(mul(dir, upperLen * Math.cos(a)), mul(perp, upperLen * Math.sin(a))));
+}
+
+/**
+ * Where the weapon's grip sits in character space. Shared by the rig (as the IK target)
+ * and by the bot renderer (as the weapon's transform), so hands and gun cannot disagree.
+ */
+export function gripTarget(hipY, spineRx, torsoRz, aimPitch, aimAmt) {
+  const chest = add([0, hipY, 0], rot([0, 0.30, 0], spineRx, 0, torsoRz));
+  const p = aimPitch;
+  const fwd = [0, Math.sin(p), -Math.cos(p)];
+  // Up at the shoulder when aiming, down by the hip when not.
+  const aimed = add(chest, add([0.11, 0.10, 0], mul(fwd, 0.36)));
+  const lowered = add(chest, [0.24, -0.30, -0.14]);
+  const t = clamp(aimAmt, 0, 1);
+  return { pos: [
+    lerp(lowered[0], aimed[0], t),
+    lerp(lowered[1], aimed[1], t),
+    lerp(lowered[2], aimed[2], t),
+  ], pitch: lerp(-0.55, p, t), fwd };
+}
 
 /**
  * A limb segment hinged at `anchor`: the box hangs `len` along the segment's own -Y,
@@ -135,39 +200,58 @@ export class CharacterRig {
     }
 
     // ---- arms ----
-    // Weapon arm swings up to the aim line; the off hand comes across to support it.
+    // The weapon's grip is decided first, then both arms are solved to reach it.
     const aim = clamp(pose.aimAmt ?? 0, 0, 1) * (1 - collapse);
     const pitch = pose.aimPitch ?? 0;
     const armSwing = dead ? 0 : -Math.sin(walk) * 0.5 * amt * (1 - aim);
     const melee = pose.meleeT ?? 0;
     const reload = pose.reloadT ?? 0;
 
+    const grip = gripTarget(hipY, spineRx, torsoRz, pitch, aim);
+    this.grip = grip.pos;
+    this.gripPitch = grip.pitch;
+
+    const UPPER = 0.30, LOWER = 0.28;
     for (const side of [-1, 1]) {
       const shoulder = add([0, hipY, 0], rot([side * 0.27, 0.50, 0], spineRx, 0, torsoRz));
       const isGunArm = side > 0;
-      let upRx, upRz, foreRx;
+
+      let target, pole;
       if (collapse > 0) {
-        upRx = 0.4 + collapse * 0.9; upRz = side * (0.5 + collapse * 0.6); foreRx = 0.5;
+        // Splayed on the floor.
+        target = add(shoulder, [side * 0.42, -0.10 - collapse * 0.1, 0.26]);
+        pole = [side, -0.4, 0.2];
       } else if (isGunArm) {
-        // Raised toward the target, elbow tucked.
-        upRx = lerp(armSwing, 1.42 + pitch * 0.75, aim);
-        upRz = lerp(0.10 * side, 0.16 * side, aim);
-        foreRx = lerp(0.35, -0.55 - pitch * 0.2, aim);
-        if (melee > 0) { upRx = 1.1 + Math.sin(melee * Math.PI) * 1.7; foreRx = -1.0 + Math.sin(melee * Math.PI) * 0.9; }
-        if (reload > 0) { upRx = lerp(upRx, 0.75, reload); foreRx = lerp(foreRx, -0.2, reload); }
+        target = grip.pos;
+        pole = [0.55, -1, 0.15];
+        if (melee > 0) {
+          // Slash: the hand swings across the body instead of holding a stance.
+          const arc = Math.sin(melee * Math.PI);
+          target = add(shoulder, [0.30 - arc * 0.62, 0.06 + arc * 0.24, -0.30 - arc * 0.22]);
+          pole = [0.8, -0.7, 0.1];
+        } else if (reload > 0) {
+          target = add(grip.pos, [0, -0.10 * reload, 0.06 * reload]);
+        }
+      } else if (pose.twoHanded && melee <= 0) {
+        // Support hand forward on the handguard.
+        target = add(grip.pos, add(mul(grip.fwd, 0.22), [-0.17, -0.02, 0]));
+        pole = [-0.75, -1, 0.15];
+        if (reload > 0) target = add(shoulder, [-0.12, -0.26, -0.16]);   // reaching for a mag
       } else {
-        upRx = lerp(-armSwing, 1.25 + pitch * 0.6, aim);
-        upRz = lerp(-0.10, -0.42, aim);
-        foreRx = lerp(0.35, -0.85, aim);
-        if (reload > 0) { upRx = lerp(upRx, 1.9, reload); upRz = lerp(upRz, -0.15, reload); foreRx = lerp(foreRx, -1.5, reload); }
+        // Free arm: ordinary walk swing, expressed as a hand position so the same IK runs.
+        const sw = armSwing;
+        target = add(shoulder, [side * 0.20, -0.50 + Math.abs(sw) * 0.06, -sw * 0.42]);
+        pole = [side * 0.9, -1, 0.1];
       }
-      const elbow = limb(f, i, shoulder, 0.30, 0.125, upRx + spineRx, upRz, shirt);
-      const hand = limb(f, i, elbow, 0.28, 0.11, upRx + foreRx + spineRx, upRz * 0.5, skin);
+
+      const elbow = ikElbow(shoulder, target, UPPER, LOWER, pole);
+      boneTo(f, i, shoulder, elbow, 0.125, shirt);
+      boneTo(f, i, elbow, target, 0.11, skin);
       pushOrientedBox(f, i, {
-        pos: hand, size: [0.13, 0.13, 0.13],
-        rot: [upRx + foreRx, 0, 0], mat: skin, inkWidth: IW * 0.85,
+        pos: target, size: [0.13, 0.13, 0.13],
+        rot: [pitch * aim, 0, 0], mat: skin, inkWidth: IW * 0.85,
       });
-      if (isGunArm) this.gunHand = hand;
+      if (isGunArm) this.gunHand = target;
     }
 
     const gl = this.gl;
