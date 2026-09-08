@@ -8,6 +8,8 @@ import { MAT } from './renderer.js';
 
 export const CELL = 3.6;
 export const WALL_H = 3.15;
+/** Cells per render chunk. Chunks are the unit of frustum and occlusion culling. */
+export const CHUNK = 6;
 
 const WALL = 1, OPEN = 0;
 
@@ -420,32 +422,57 @@ export class GameMap {
   // ------------------------------------------------------------ geometry
 
   /**
-   * Static level geometry. Walls merge into big boxes for the fills; the ink is generated
-   * from the grid itself so only real silhouette edges get drawn - no pen marks stranded
-   * in the middle of a flat wall.
+   * Static level geometry, split into chunks. A chunk is one CHUNK x CHUNK block of cells
+   * with its own fill and ink mesh plus an AABB, which is what makes culling possible:
+   * a single map-sized mesh can only ever be drawn whole.
    */
   build(gl) {
-    const f = new FillBuilder();
-    const ink = new InkBuilder();
     const { w, h } = this;
     const H = this.wallH;
+    this.chunksX = Math.ceil(w / CHUNK);
+    this.chunksZ = Math.ceil(h / CHUNK);
 
-    // Floor + ceiling as single slabs; the fragment shader handles their surface detail.
-    f.quad([0, 0, this.sizeZ], [this.sizeX, 0, this.sizeZ], [this.sizeX, 0, 0], [0, 0, 0],
-      [0, 1, 0], MAT.FLOOR, [[0, this.sizeZ], [this.sizeX, this.sizeZ], [this.sizeX, 0], [0, 0]]);
-    f.quad([0, H, 0], [this.sizeX, H, 0], [this.sizeX, H, this.sizeZ], [0, H, this.sizeZ],
-      [0, -1, 0], MAT.CEIL, [[0, 0], [this.sizeX, 0], [this.sizeX, this.sizeZ], [0, this.sizeZ]]);
+    const chunks = [];
+    for (let cz = 0; cz < this.chunksZ; cz++) {
+      for (let cx = 0; cx < this.chunksX; cx++) {
+        const i0 = cx * CHUNK, j0 = cz * CHUNK;
+        const i1 = Math.min(w, i0 + CHUNK), j1 = Math.min(h, j0 + CHUNK);
+        chunks.push({
+          index: cz * this.chunksX + cx,
+          cx, cz, i0, j0, i1, j1,
+          fillB: new FillBuilder(), inkB: new InkBuilder(),
+          min: [i0 * CELL, 0, j0 * CELL],
+          max: [i1 * CELL, H, j1 * CELL],
+          fill: null, ink: null,
+        });
+      }
+    }
+    const chunkAt = (i, j) => chunks[
+      Math.min(this.chunksZ - 1, Math.max(0, Math.floor(j / CHUNK))) * this.chunksX +
+      Math.min(this.chunksX - 1, Math.max(0, Math.floor(i / CHUNK)))];
 
-    // Greedy-merge wall cells into rectangles.
+    // Floor and ceiling, one slab per chunk so they cull with everything else.
+    for (const c of chunks) {
+      const x0 = c.i0 * CELL, x1 = c.i1 * CELL, z0 = c.j0 * CELL, z1 = c.j1 * CELL;
+      c.fillB.quad([x0, 0, z1], [x1, 0, z1], [x1, 0, z0], [x0, 0, z0],
+        [0, 1, 0], MAT.FLOOR, [[x0, z1], [x1, z1], [x1, z0], [x0, z0]]);
+      c.fillB.quad([x0, H, z0], [x1, H, z0], [x1, H, z1], [x0, H, z1],
+        [0, -1, 0], MAT.CEIL, [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]);
+    }
+
+    // Greedy-merge wall cells into boxes, but never across a chunk border - a box that
+    // straddles two chunks would have to be drawn whenever either one is visible.
     const used = new Uint8Array(w * h);
     for (let j = 0; j < h; j++) {
       for (let i = 0; i < w; i++) {
         const c = this.idx(i, j);
         if (this.cells[c] !== WALL || used[c]) continue;
+        const iMax = Math.min(w, (Math.floor(i / CHUNK) + 1) * CHUNK);
+        const jMax = Math.min(h, (Math.floor(j / CHUNK) + 1) * CHUNK);
         let rw = 1;
-        while (i + rw < w && this.cells[this.idx(i + rw, j)] === WALL && !used[this.idx(i + rw, j)]) rw++;
+        while (i + rw < iMax && this.cells[this.idx(i + rw, j)] === WALL && !used[this.idx(i + rw, j)]) rw++;
         let rh = 1;
-        outer: while (j + rh < h) {
+        outer: while (j + rh < jMax) {
           for (let k = 0; k < rw; k++) {
             const cc = this.idx(i + k, j + rh);
             if (this.cells[cc] !== WALL || used[cc]) break outer;
@@ -454,71 +481,72 @@ export class GameMap {
         }
         for (let b = 0; b < rh; b++) for (let a = 0; a < rw; a++) used[this.idx(i + a, j + b)] = 1;
         const isPillar = rw <= 2 && rh <= 2;
-        f.box([i * CELL, 0, j * CELL], [(i + rw) * CELL, H, (j + rh) * CELL],
+        chunkAt(i, j).fillB.box([i * CELL, 0, j * CELL], [(i + rw) * CELL, H, (j + rh) * CELL],
           isPillar ? MAT.TRIM : MAT.WALL, 0x3f, 1);
       }
     }
 
-    this._buildWallInk(ink);
+    this._buildWallInk(chunkAt);
 
-    // Recessed ceiling panels.
     for (const L of this.lights) {
       const x0 = L.i * CELL + CELL * 0.22, x1 = (L.i + 1) * CELL - CELL * 0.22;
       const z0 = L.j * CELL + CELL * 0.22, z1 = (L.j + 1) * CELL - CELL * 0.22;
-      f.box([x0, H - 0.09, z0], [x1, H, z1], MAT.LIGHT, 0x3f, 1);
-      ink.box([x0, H - 0.09, z0], [x1, H - 0.02, z1], 1.9);
+      const c = chunkAt(L.i, L.j);
+      c.fillB.box([x0, H - 0.09, z0], [x1, H, z1], MAT.LIGHT, 0x3f, 1);
+      c.inkB.box([x0, H - 0.09, z0], [x1, H - 0.02, z1], 1.9);
     }
 
-    return {
-      fill: f.toMesh(gl),
-      ink: ink.toMesh(gl),
-    };
+    for (const c of chunks) {
+      c.fill = c.fillB.toMesh(gl);
+      c.ink = c.inkB.toMesh(gl);
+      c.fillB = null; c.inkB = null;
+    }
+    this.chunks = chunks;
+    return { chunks, chunksX: this.chunksX, chunksZ: this.chunksZ };
   }
 
-  _buildWallInk(ink) {
+  _buildWallInk(chunkAt) {
     const { w, h } = this;
     const H = this.wallH;
     const LINE = 2.9;
 
-    // --- boundary lines between open floor and wall, merged into long runs -------------
-    const vertRuns = new Map(); // key: grid line i -> list of [jStart, jEnd]
-    const horizRuns = new Map();
-
-    const addRun = (map, key, a) => {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(a);
+    // --- boundary lines between open floor and wall, merged into long runs then split
+    //     at chunk borders so each piece belongs to exactly one chunk.
+    const emitRunX = (j, a, b) => {
+      const z = j * CELL;
+      for (let s = a; s < b;) {
+        const e = Math.min(b, (Math.floor(s / CHUNK) + 1) * CHUNK);
+        const ink = chunkAt(s, Math.min(h - 1, j)).inkB;
+        ink.edge([s * CELL, 0, z], [e * CELL, 0, z], LINE);
+        ink.edge([s * CELL, H, z], [e * CELL, H, z], LINE * 0.9);
+        s = e;
+      }
+    };
+    const emitRunZ = (i, a, b) => {
+      const x = i * CELL;
+      for (let s = a; s < b;) {
+        const e = Math.min(b, (Math.floor(s / CHUNK) + 1) * CHUNK);
+        const ink = chunkAt(Math.min(w - 1, i), s).inkB;
+        ink.edge([x, 0, s * CELL], [x, 0, e * CELL], LINE);
+        ink.edge([x, H, s * CELL], [x, H, e * CELL], LINE * 0.9);
+        s = e;
+      }
     };
 
-    for (let j = 0; j < h; j++) {
+    for (let j = 0; j <= h; j++) {
       let runStart = -1;
       for (let i = 0; i <= w; i++) {
-        // Horizontal boundary along grid line z = j*CELL, spanning cells in x.
         const solid = i < w && (this.isWall(i, j - 1) !== this.isWall(i, j));
         if (solid && runStart < 0) runStart = i;
-        else if (!solid && runStart >= 0) { addRun(horizRuns, j, [runStart, i]); runStart = -1; }
+        else if (!solid && runStart >= 0) { emitRunX(j, runStart, i); runStart = -1; }
       }
     }
-    for (let i = 0; i < w; i++) {
+    for (let i = 0; i <= w; i++) {
       let runStart = -1;
       for (let j = 0; j <= h; j++) {
         const solid = j < h && (this.isWall(i - 1, j) !== this.isWall(i, j));
         if (solid && runStart < 0) runStart = j;
-        else if (!solid && runStart >= 0) { addRun(vertRuns, i, [runStart, j]); runStart = -1; }
-      }
-    }
-
-    for (const [j, runs] of horizRuns) {
-      for (const [a, b] of runs) {
-        const z = j * CELL;
-        ink.edge([a * CELL, 0, z], [b * CELL, 0, z], LINE);
-        ink.edge([a * CELL, H, z], [b * CELL, H, z], LINE * 0.9);
-      }
-    }
-    for (const [i, runs] of vertRuns) {
-      for (const [a, b] of runs) {
-        const x = i * CELL;
-        ink.edge([x, 0, a * CELL], [x, 0, b * CELL], LINE);
-        ink.edge([x, H, a * CELL], [x, H, b * CELL], LINE * 0.9);
+        else if (!solid && runStart >= 0) { emitRunZ(i, runStart, j); runStart = -1; }
       }
     }
 
@@ -532,9 +560,93 @@ export class GameMap {
         // (a pinch point); two side-by-side walls is just a flat surface running through.
         const diagonal = n === 2 && ((a && d && !b && !c) || (b && c && !a && !d));
         if (n === 1 || n === 3 || diagonal) {
-          ink.edge([i * CELL, 0, j * CELL], [i * CELL, H, j * CELL], LINE);
+          chunkAt(Math.min(w - 1, i), Math.min(h - 1, j)).inkB
+            .edge([i * CELL, 0, j * CELL], [i * CELL, H, j * CELL], LINE);
         }
       }
     }
+  }
+
+  // ------------------------------------------------------------ culling
+
+  /**
+   * Which chunks can the camera actually see?
+   *
+   * Frustum culling alone still draws every room behind the wall you're facing, so this
+   * also floods outward from the camera's cell through *open* cells only, the way a
+   * portal-based renderer walks a level. A wall stops the flood dead, so rooms with no
+   * line of sight are never reached. Walls next to reached cells are marked too, otherwise
+   * the room you're standing in would have no walls.
+   *
+   * Conservative in the safe direction: it can mark a chunk you can't quite see, but it
+   * cannot miss one you can.
+   */
+  computeVisibleChunks(camPos, frustum, outMask) {
+    const { w, h } = this;
+    const H = this.wallH;
+    const nx = this.chunksX, nz = this.chunksZ;
+    if (!outMask || outMask.length !== nx * nz) outMask = new Uint8Array(nx * nz);
+    outMask.fill(0);
+
+    const seen = this._visSeen && this._visSeen.length === w * h ? this._visSeen : (this._visSeen = new Int32Array(w * h));
+    const queue = this._visQueue && this._visQueue.length === w * h ? this._visQueue : (this._visQueue = new Int32Array(w * h));
+    const stamp = (this._visStamp = (this._visStamp || 0) + 1);
+
+    const markCell = (i, j) => {
+      // Mark the cell's chunk plus its diagonal neighbours' chunks. Geometry that sits
+      // exactly on a chunk border is filed under one side or the other; this halo means
+      // we never drop a line because it landed in the neighbour.
+      for (let dj = -1; dj <= 1; dj += 2) {
+        for (let di = -1; di <= 1; di += 2) {
+          const ci = Math.min(nx - 1, Math.max(0, Math.floor((i + di) / CHUNK)));
+          const cj = Math.min(nz - 1, Math.max(0, Math.floor((j + dj) / CHUNK)));
+          outMask[cj * nx + ci] = 1;
+        }
+      }
+      outMask[Math.min(nz - 1, Math.max(0, Math.floor(j / CHUNK))) * nx +
+              Math.min(nx - 1, Math.max(0, Math.floor(i / CHUNK)))] = 1;
+    };
+
+    let [si, sj] = this.cellOf(camPos.x, camPos.z);
+    si = Math.min(w - 1, Math.max(0, si));
+    sj = Math.min(h - 1, Math.max(0, sj));
+    if (!this.isOpen(si, sj)) {
+      // Camera clipped into geometry - fall back to the nearest open cell.
+      let best = -1, bestD = Infinity;
+      for (const c of this.openCells) {
+        const ci = c % w, cj = (c / w) | 0;
+        const d = (ci - si) ** 2 + (cj - sj) ** 2;
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      if (best < 0) { outMask.fill(1); return outMask; }
+      si = best % w; sj = (best / w) | 0;
+    }
+
+    let head = 0, tail = 0;
+    const start = this.idx(si, sj);
+    seen[start] = stamp; queue[tail++] = start;
+    markCell(si, sj);
+
+    // The frustum test is inflated by most of a cell: a staircase BFS path can bulge a
+    // little off the straight sight line, and clipping it there would pop whole rooms.
+    const pad = CELL * 0.8;
+
+    while (head < tail) {
+      const c = queue[head++];
+      const i = c % w, j = (c / w) | 0;
+      for (let k = 0; k < 4; k++) {
+        const ni = i + (k === 0 ? -1 : k === 1 ? 1 : 0);
+        const nj = j + (k === 2 ? -1 : k === 3 ? 1 : 0);
+        if (ni < 0 || nj < 0 || ni >= w || nj >= h) continue;
+        const n = this.idx(ni, nj);
+        if (seen[n] === stamp) continue;
+        seen[n] = stamp;
+        if (!frustum.aabb(ni * CELL - pad, -pad, nj * CELL - pad,
+                          (ni + 1) * CELL + pad, H + pad, (nj + 1) * CELL + pad)) continue;
+        markCell(ni, nj);
+        if (this.cells[n] === OPEN) queue[tail++] = n;   // walls are marked, never crossed
+      }
+    }
+    return outMask;
   }
 }

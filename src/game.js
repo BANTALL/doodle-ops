@@ -13,7 +13,7 @@ import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
 import { settings } from './settings.js';
 import { Sfx, resumeAudio } from './audio.js';
-import { M4, V, Rng, clamp, lerp, yawOf, dirFrom } from './math.js';
+import { M4, V, Rng, clamp, lerp, smoothstep, yawOf, dirFrom } from './math.js';
 
 export const ANIM_HZ = 12;
 const ANIM_DT = 1 / ANIM_HZ;
@@ -57,6 +57,10 @@ export class Game {
     this.entities = null;
     this.world = null;
     this.worldMesh = null;
+    this.chunkMask = null;
+
+    // Sniper impact frame: a single black-and-white frame spliced in on a solid hit.
+    this.impact = { t: 0, dur: 0.65, point: V.make(), uv: [0.5, 0.5] };
 
     this._m = M4.create();
     this._v = V.make();
@@ -79,14 +83,14 @@ export class Game {
     this.matchOver = false;
     this.winner = null;
 
-    this.worldMesh?.fill.dispose();
-    this.worldMesh?.ink.dispose();
+    if (this.worldMesh) for (const c of this.worldMesh.chunks) { c.fill.dispose(); c.ink.dispose(); }
     for (const b of this.bots) b.dispose();
 
     this.map = new GameMap(seed, 30, 30);
     this.renderer.ceilH = this.map.wallH;
     this.renderer.setColorSweep(this.map.colorOrigin, this.map.colorDir, this.map.colorSlope);
     this.worldMesh = this.map.build(this.gl);
+    this.chunkMask = new Uint8Array(this.worldMesh.chunksX * this.worldMesh.chunksZ);
 
     this.entities = new Entities(this.gl, this.map, this.rng, this.weapons);
     this.entities.spawnCrates(26);
@@ -119,6 +123,7 @@ export class Game {
     this.hud.toasts.length = 0;
     this.time = 0;
     this.animFrame = 0;
+    this.impact.t = 0;
     this.toast('FIND A GUN. SMASH THE CRATES.');
   }
 
@@ -209,6 +214,7 @@ export class Game {
     this.player.update(dt, this.input, now);
     for (const b of this.bots) b.update(dt, now);
     this.entities.update(dt);
+    if (this.impact.t > 0) this.impact.t = Math.max(0, this.impact.t - dt);
 
     // Respawns.
     if (!this.player.alive && now >= this.player.respawnAt) {
@@ -232,7 +238,8 @@ export class Game {
     c.yaw = p.aimYaw;
     c.pitch = p.aimPitch;
     c.roll = p.roll;
-    const targetFov = settings.fov * p.fovScale;
+    // A little FOV stretch as the run builds, so speed is felt as well as seen.
+    const targetFov = settings.fov * p.fovScale + p.momentum * 7 * (1 - p.loadout.scopeT);
     c.fov = lerp(c.fov, targetFov, clamp(dt * 14, 0, 1));
 
     // Camera basis, used to orient billboards.
@@ -288,10 +295,13 @@ export class Game {
     const free = (x, z) => map._circleFree(x, z, BODY_RADIUS) && !blockCrates(x, z);
 
     const dx = a.vel.x * dt, dz = a.vel.z * dt;
+    let blocked = false;
     const nx = a.pos.x + dx;
-    if (free(nx, a.pos.z)) a.pos.x = nx; else a.vel.x *= 0.1;
+    if (free(nx, a.pos.z)) a.pos.x = nx;
+    else { if (Math.abs(dx) > 1e-4) blocked = true; a.vel.x *= 0.1; }
     const nz = a.pos.z + dz;
-    if (free(a.pos.x, nz)) a.pos.z = nz; else a.vel.z *= 0.1;
+    if (free(a.pos.x, nz)) a.pos.z = nz;
+    else { if (Math.abs(dz) > 1e-4) blocked = true; a.vel.z *= 0.1; }
 
     a.pos.y += a.vel.y * dt;
     const ground = this.groundHeight(a.pos.x, a.pos.z, a.pos.y);
@@ -304,6 +314,7 @@ export class Game {
     }
     const headroom = WALL_H - BODY_HEIGHT;
     if (a.pos.y > headroom) { a.pos.y = headroom; if (a.vel.y > 0) a.vel.y = 0; }
+    return blocked;
   }
 
   /** Something loud happened. Bots within range go and look. */
@@ -333,6 +344,11 @@ export class Game {
 
     if (hit.kind === 'actor') {
       this.applyDamage(hit.target, hit.damage, shooter, hit.head, def);
+      // A sniper round connecting is the one moment worth stopping the drawing for.
+      if (def.id === 'sniper' && shooter.isPlayer) {
+        this.impact.t = this.impact.dur;
+        V.copy(this.impact.point, hit.point);
+      }
     } else if (hit.kind === 'crate') {
       ent.addPuff(hit.point, 0.24);
       ent.damageCrate(hit.target, hit.damage, (c) => this.onCrateBroken(c));
@@ -415,6 +431,10 @@ export class Game {
 
   endMatch() {
     this.matchOver = true;
+    // Set the flag directly rather than through setPaused, which would swap the end
+    // screen out for the pause menu. Without this, paused is already false when PLAY
+    // AGAIN calls setPaused(false), it early-outs, and the popup never goes away.
+    this.paused = true;
     const sorted = [...this.actors].sort((a, b) => b.kills - a.kills);
     this.winner = sorted[0];
     this.input.exitLock();
@@ -424,6 +444,24 @@ export class Game {
 
   toast(text) { this.hud.addToast(text); }
 
+  /**
+   * Impact-frame parameters. Real-time driven, so it lasts 0.65s at any frame rate: a
+   * short hold at full strength, then a fade so you get your view back.
+   */
+  _impactPost(r) {
+    const it = this.impact.t;
+    if (it <= 0) return { impact: 0 };
+    const age = this.impact.dur - it;
+    const strength = age < 0.11 ? 1 : 1 - smoothstep(0.11, this.impact.dur, age);
+    const s = r.worldToScreen(this.impact.point);
+    if (s) this.impact.uv = [s.x / r.width, 1 - s.y / r.height];
+    return {
+      impact: strength,
+      impactUv: this.impact.uv,
+      impactR: lerp(0.05, 0.30, clamp(age / 0.16, 0, 1)),
+    };
+  }
+
   // ------------------------------------------------------------ render
 
   render() {
@@ -432,11 +470,25 @@ export class Game {
     // The wobble seed only changes on an animation step, so lines hold still between them.
     r.beginFrame(this.camera, this.animFrame * 0.7351);
 
-    r.fill(this.worldMesh.fill, null, { objSeed: 0 });
-    r.ink(this.worldMesh.ink, null, { objSeed: 0 });
+    // Only submit the chunks the camera can reach and see.
+    this.map.computeVisibleChunks(this.camera.pos, r.frustum, this.chunkMask);
+    const chunks = this.worldMesh.chunks;
+    r.stats.chunks = chunks.length;
+    for (let i = 0; i < chunks.length; i++) {
+      if (!this.chunkMask[chunks[i].index]) continue;
+      r.stats.chunksDrawn++;
+      r.fill(chunks[i].fill, null, { objSeed: 0 });
+      r.ink(chunks[i].ink, null, { objSeed: 0 });
+    }
 
     this.entities.render(r, this.camera);
-    for (const b of this.bots) b.render(r, this.camera);
+    for (const b of this.bots) {
+      r.stats.actors++;
+      // Generous radius: the rig reaches about a metre out from the root in any direction.
+      if (!r.frustum.sphere(b.animPos.x, b.animPos.y + 0.9, b.animPos.z, 1.6)) continue;
+      r.stats.actorsDrawn++;
+      b.render(r, this.camera);
+    }
     this.player.renderViewmodel(r);
 
     const p = this.player;
@@ -445,6 +497,7 @@ export class Game {
       scopeRadius: 0.345,
       damage: p.damageFlash,
       death: p.alive ? 0 : clamp(p.deathTimer * 1.6, 0, 0.8),
+      ...this._impactPost(r),
     });
 
     // No HUD behind the menus - the start screen was reading as a pile of overlapping UI.

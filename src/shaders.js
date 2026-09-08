@@ -403,6 +403,9 @@ uniform float uScope;      // 0..1 scope blend
 uniform float uScopeR;     // scope radius, fraction of min(res)
 uniform float uDamage;     // 0..1 red flash
 uniform float uDeath;      // 0..1 desaturate + darken on death
+uniform float uImpact;     // 0..1 sniper impact frame
+uniform vec2  uImpactUv;
+uniform float uImpactR;
 uniform vec3 uPaperColor;
 
 out vec4 fragColor;
@@ -446,6 +449,25 @@ void main(){
   if (uDeath > 0.001) {
     float g = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(col, vec3(g) * 0.75, uDeath);
+  }
+
+  // Impact frame. The page goes black except for a hole blown open at the hit, which
+  // reads as a single hand-inked frame spliced into the animation.
+  if (uImpact > 0.001) {
+    vec2 aspect = vec2(uRes.x / uRes.y, 1.0);
+    vec2 rel = (uv - uImpactUv) * aspect;
+    float d = length(rel);
+    // Ragged rim, redrawn each animation step, so it never looks like a vector circle.
+    float ang = atan(rel.y, rel.x);
+    float wob = 1.0 + 0.20 * (vnoise(vec2(ang * 2.4, uSeed * 3.1) * 2.0) - 0.5)
+                    + 0.10 * (vnoise(vec2(ang * 7.0, uSeed * 1.7) * 3.0) - 0.5);
+    float R = uImpactR * wob;
+    float inside = 1.0 - smoothstep(R * 0.80, R, d);
+    // A few splinters shooting out past the rim.
+    float spikes = smoothstep(0.55, 1.0, vnoise(vec2(ang * 5.0, uSeed)));
+    inside = max(inside, (1.0 - smoothstep(R * 1.05, R * 1.75, d)) * spikes);
+    vec3 frame = mix(vec3(0.02, 0.02, 0.03), vec3(1.0), inside);
+    col = mix(col, frame, uImpact);
   }
 
   fragColor = vec4(col, 1.0);

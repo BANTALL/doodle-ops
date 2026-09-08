@@ -28,6 +28,8 @@ export class Loadout {
     this.pendingMelee = 0;            // time until a swing actually connects
     this.lastFire = -99;
     this.wantAuto = false;
+    this.swapFrom = null;             // weapon we're spinning away from, during a draw
+    this.slashDir = 1;                // knife swings alternate sides
   }
 
   get id() { return this.slot === 'melee' ? KNIFE : this.gun; }
@@ -41,6 +43,7 @@ export class Loadout {
   switchTo(slot) {
     if (slot === 'gun' && !this.gun) return false;
     if (slot === this.slot) return false;
+    this.swapFrom = this.id;
     this.slot = slot;
     this.drawT = this.def.drawTime;
     this.reloadT = 0;
@@ -54,6 +57,7 @@ export class Loadout {
   /** Swap in a new gun, handing back what was being carried so it can be dropped. */
   takeGun(gunId, ammo, reserve) {
     const old = this.gun ? { gunId: this.gun, ammo: this.ammo, reserve: this.reserve } : null;
+    this.swapFrom = this.id;
     this.gun = gunId;
     const def = WEAPONS[gunId];
     this.ammo = ammo ?? def.mag;
@@ -75,7 +79,10 @@ export class Loadout {
 
   update(dt) {
     this.cooldown = Math.max(0, this.cooldown - dt);
-    if (this.drawT > 0) this.drawT = Math.max(0, this.drawT - dt);
+    if (this.drawT > 0) {
+      this.drawT = Math.max(0, this.drawT - dt);
+      if (this.drawT === 0) this.swapFrom = null;
+    }
     if (this.reloadT > 0) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) {
@@ -103,6 +110,7 @@ export class Loadout {
       this.cooldown = def.rate;
       this.pendingMelee = def.hitDelay;
       this.lastFire = now;
+      this.slashDir = -this.slashDir;   // alternate the swing side
       return true;
     }
     if (this.ammo <= 0) return false;

@@ -185,6 +185,7 @@ export class Hud {
 
     this._damageMarks(cx, cy);
     this._hitMarkers(cx, cy);
+    this._speedLines(game);
     this._health(game);
     this._ammo(game);
     this._weaponSlots(game);
@@ -280,6 +281,29 @@ export class Hud {
       this.line(0, -r - 16, 24, -r, 4, 81, RED);
       g.restore();
     }
+  }
+
+  /** Motion lines scribbled in from the edges once you've built up a head of steam. */
+  _speedLines(game) {
+    const m = game.player.momentum;
+    if (m < 0.12 || !game.player.alive) return;
+    const g = this.ctx;
+    const cx = this.w / 2, cy = this.h / 2;
+    const count = Math.round(6 + m * 16);
+    const reach = Math.max(this.w, this.h) * 0.62;
+    g.save();
+    g.globalAlpha = clamp((m - 0.1) * 1.3, 0, 1) * 0.5;
+    for (let i = 0; i < count; i++) {
+      // Stable angles per line, re-jittered on the animation clock like everything else.
+      const a = (i / count) * TAU + hash01(i * 13, 0) * 0.5;
+      const inner = reach * (0.42 + hash01(i, this.frame) * 0.18);
+      const outer = inner + reach * (0.16 + m * 0.30) * (0.6 + hash01(i * 7, this.frame) * 0.8);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      this.line(cx + ca * inner, cy + sa * inner * 0.7,
+                cx + ca * outer, cy + sa * outer * 0.7,
+                1.6 + m * 1.6, 300 + i, INK_SOFT);
+    }
+    g.restore();
   }
 
   _health(game) {
@@ -439,7 +463,11 @@ export class Hud {
   }
 
   _fps(game) {
+    const st = game.renderer.stats;
     this.text(`${Math.round(game.fps)} fps`, this.w - 18, 24, 15, 'right', INK_SOFT, 'normal');
     this.text(`anim ${game.animFps.toFixed(0)}`, this.w - 18, 44, 13, 'right', INK_SOFT, 'normal');
+    this.text(`chunks ${st.chunksDrawn}/${st.chunks}`, this.w - 18, 62, 12, 'right', INK_SOFT, 'normal');
+    this.text(`props ${st.propsDrawn}/${st.props}  bots ${st.actorsDrawn}/${st.actors}`, this.w - 18, 78, 12, 'right', INK_SOFT, 'normal');
+    this.text(`boost +${Math.round(game.player.momentum * 55)}%`, this.w - 18, 94, 12, 'right', INK_SOFT, 'normal');
   }
 }

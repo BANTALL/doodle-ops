@@ -4,7 +4,7 @@
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT, BODY_RADIUS } from './combat.js';
 import { WEAPONS, HOLD, ADS, MUZZLE, CYCLE } from './weapons.js';
-import { M4, V, Rng, clamp, lerp, damp, dirFrom, DEG, TAU } from './math.js';
+import { M4, V, Rng, clamp, lerp, damp, smoothstep, dirFrom, DEG, TAU } from './math.js';
 import { settings } from './settings.js';
 import { Sfx } from './audio.js';
 import { FillBuilder, InkBuilder } from './geom.js';
@@ -17,6 +17,19 @@ const FRICTION = 9.5;
 const GRAVITY = 18.5;
 const JUMP_VEL = 6.35;
 const PICKUP_RANGE = 3.1;
+
+// Running momentum. Keep moving forward and you wind up to +55% speed; anything that
+// interrupts a clean run - reversing, a wall, stopping - dumps it entirely.
+const MOMENTUM_MAX = 0.55;
+const MOMENTUM_RAMP = 4.2;          // seconds of clean running to reach the top
+const MOMENTUM_MIN_SPEED = 2.6;     // below this you aren't running, you're shuffling
+const STRAFE_BLEED = 0.10;          // fraction of the *boost* a sidestep costs
+const STRAFE_BLEED_EVERY = 0.4;     // ...applied this often while you hold it
+const STRAFE_FAST = 4.2;            // only counts once you're actually moving
+
+// Knife idle: after this long standing around, start playing with it.
+const IDLE_TWIRL_AFTER = 3.0;
+const TWIRL_SPEED = 1.15;           // rotations per second
 
 /** Matrix at `from` whose +Z axis points at `toward`. Used to aim the forearms. */
 function aimMatrix(out, from, toward) {
@@ -87,6 +100,12 @@ export class Player {
     this.respawnAt = 0;
     this.footDist = 0;
     this.lastAttacker = null;
+    this.momentum = 0;
+    this.strafeBleedT = 0;
+    this.idleTimer = 0;
+    this.twirlActive = false;
+    this.twirlBlend = 0;
+    this.twirlPhase = 0;
 
     // viewmodel animation state, only touched on animation steps
     this.vm = {
@@ -100,6 +119,8 @@ export class Player {
     this.highlighted = null;
     this._m = M4.create();
     this._m2 = M4.create();
+    this._m3 = M4.create();
+    this._poseScratch = [makePose(), makePose(), makePose(), makePose()];
     this._dir = V.make();
     this._hit = {};
     this.flashMesh = null;
@@ -133,7 +154,14 @@ export class Player {
     this.damageFlash = 0;
     this.loadout = new Loadout('pistol');
     this.pitch = 0;
+    this.momentum = 0;
+    this.idleTimer = 0;
+    this.twirlActive = false;
+    this.twirlBlend = 0;
   }
+
+  /** Speed multiplier from running momentum. */
+  get momentumMult() { return 1 + MOMENTUM_MAX * this.momentum; }
 
   // ------------------------------------------------------------ input
 
@@ -183,7 +211,7 @@ export class Player {
 
     const def = this.loadout.def;
     const scopePenalty = lerp(1, 0.45, this.loadout.scopeT);
-    const maxSpeed = WALK_SPEED * (def.moveMult ?? 1) * scopePenalty;
+    const maxSpeed = WALK_SPEED * (def.moveMult ?? 1) * scopePenalty * this.momentumMult;
 
     const accel = this.onGround ? ACCEL : AIR_ACCEL;
     this.vel.x += wx * accel * dt;
@@ -211,7 +239,8 @@ export class Player {
 
     // --- integrate + collide
     const wasAir = !this.onGround;
-    game.moveActor(this, dt);
+    const blocked = game.moveActor(this, dt);
+    this._updateMomentum(dt, fwd, side, mag, blocked);
     if (wasAir && this.onGround) {
       this.landDip = Math.min(0.22, Math.abs(this.vel.y) * 0.012 + 0.06);
       Sfx.land();
@@ -240,6 +269,40 @@ export class Player {
     this.damageFlash = Math.max(0, this.damageFlash - dt * 1.9);
   }
 
+  /**
+   * Momentum bookkeeping. Built by running forward, spent by everything else: reversing,
+   * stopping, or putting a shoulder into a wall clears it outright, and sidestepping at
+   * speed shaves a tenth off the boost each time it ticks.
+   */
+  _updateMomentum(dt, fwd, side, mag, blocked) {
+    const speed = Math.hypot(this.vel.x, this.vel.z);
+
+    if (blocked || fwd < -0.05 || mag === 0 || speed < 1.4) {
+      this.momentum = 0;
+      this.strafeBleedT = 0;
+      return;
+    }
+
+    const strafing = Math.abs(side) > 0.4 && speed > STRAFE_FAST;
+
+    // Building and bleeding at full rate would cancel out and you'd never feel the cost of
+    // a sidestep, so a fast strafe throttles the build as well as taking its cut. Holding a
+    // diagonal settles at roughly a third of the boost instead of pinning at the top.
+    if (fwd > 0.3 && speed > MOMENTUM_MIN_SPEED) {
+      this.momentum = Math.min(1, this.momentum + dt / MOMENTUM_RAMP * (strafing ? 0.35 : 1));
+    }
+
+    if (strafing) {
+      this.strafeBleedT += dt;
+      while (this.strafeBleedT >= STRAFE_BLEED_EVERY) {
+        this.strafeBleedT -= STRAFE_BLEED_EVERY;
+        this.momentum *= 1 - STRAFE_BLEED;
+      }
+    } else {
+      this.strafeBleedT = 0;
+    }
+  }
+
   _updateWeaponInput(dt, input, now) {
     const lo = this.loadout;
     const def = lo.def;
@@ -266,6 +329,15 @@ export class Player {
       lo.pendingMelee -= dt;
       if (lo.pendingMelee <= 0) this._meleeHit();
     }
+
+    // Idle knife play: stand still holding the knife for a few seconds and you start
+    // spinning it on a finger. Any input at all puts a stop to it.
+    const speed = Math.hypot(this.vel.x, this.vel.z);
+    const idleOk = lo.isMelee && lo.cooldown <= 0 && lo.drawT <= 0 && speed < 1.2 && !input.buttons[0];
+    if (idleOk) this.idleTimer += dt; else this.idleTimer = 0;
+    this.twirlActive = idleOk && this.idleTimer >= IDLE_TWIRL_AFTER;
+    this.twirlBlend = damp(this.twirlBlend, this.twirlActive ? 1 : 0, 7, dt);
+    if (this.twirlBlend > 0.001) this.twirlPhase += dt * TWIRL_SPEED;
 
     const wantFire = def.auto ? input.buttons[0] : input.buttonPressed[0];
     if (wantFire) {
@@ -407,98 +479,204 @@ export class Player {
     if (this.flashFrames > 0) this.flashFrames--;
   }
 
-  /** Queue the viewmodel for this frame. All poses are read from the 12fps state. */
-  renderViewmodel(r) {
-    if (!this.alive) return;
+  // ---- viewmodel pose ----------------------------------------------------
+  //
+  // The pose is a pure function of the weapon timers, which is what makes smear frames
+  // possible: ask for the same pose a few milliseconds "ago" and draw its outline faintly
+  // behind the real one. Fast moves - a slash, a swap twirl - trail; slow ones don't.
+
+  /**
+   * @param back  seconds to rewind the fast timers by (0 for the pose you actually see)
+   */
+  _vmPose(back, out) {
     const lo = this.loadout;
-    const id = lo.id;
-    const model = this.game.weapons.models[id];
-    if (!model) return;
-    const hold = HOLD[id];
+    const curDef = lo.def;
     const vm = this.vm;
-    const def = lo.def;
 
-    const scope = def.scope ? lo.scopeT : 0;
-    if (scope > 0.93) return;   // fully scoped: the reticle takes over
+    const drawTime = curDef.drawTime;
+    const drawT = lo.drawT > 0 ? Math.min(drawTime, lo.drawT + back) : 0;
+    const swapping = drawT > 0 && !!lo.swapFrom;
+    const swapP = swapping ? 1 - drawT / drawTime : 1;
 
-    // --- assemble the pose
+    // Halfway through the twirl the old weapon becomes the new one - that swap happens
+    // while it's spinning fastest, so you read it as the knife *turning into* the gun.
+    const id = swapping && swapP < 0.5 ? lo.swapFrom : lo.id;
+    const def = WEAPONS[id];
+    const hold = HOLD[id];
+
+    const scope = curDef.scope ? lo.scopeT : 0;
     const bobX = Math.sin(vm.bobPhase) * 0.020 * vm.moveAmt;
     const bobY = -Math.abs(Math.cos(vm.bobPhase)) * 0.018 * vm.moveAmt;
-    const drawT = lo.drawT > 0 ? lo.drawT / def.drawTime : 0;
-    const reload = lo.reloadT > 0 ? 1 - Math.abs(1 - 2 * (1 - lo.reloadT / def.reload)) : 0;
-    const meleeSwing = def.kind === 'melee' && lo.cooldown > 0 ? 1 - lo.cooldown / def.rate : 0;
+    const reload = lo.reloadT > 0 ? 1 - Math.abs(1 - 2 * (1 - lo.reloadT / curDef.reload)) : 0;
     const kick = vm.kick;
 
     let px = hold.pos[0] + vm.swayX + bobX;
-    let py = hold.pos[1] + vm.swayY + bobY + vm.jumpOff - drawT * 0.32 - reload * 0.11;
+    let py = hold.pos[1] + vm.swayY + bobY + vm.jumpOff - reload * 0.11;
     let pz = hold.pos[2] + kick * 0.055;
-    let rotX = hold.rot[0] - kick * 0.16 - drawT * 0.55 - reload * 0.5 + vm.swayY * 2.2;
-    let rotY = hold.rot[1] + vm.swayX * 2.6 - reload * 0.35;
-    let rotZ = hold.rot[2] + Math.sin(vm.bobPhase) * 0.02 * vm.moveAmt + reload * 0.4;
+    let rx = hold.rot[0] - kick * 0.16 - reload * 0.5 + vm.swayY * 2.2;
+    let ry = hold.rot[1] + vm.swayX * 2.6 - reload * 0.35;
+    let rz = hold.rot[2] + Math.sin(vm.bobPhase) * 0.02 * vm.moveAmt + reload * 0.4;
+    let scale = 1;
+    let hands = true;
+    let smear = 0;
 
-    if (meleeSwing > 0) {
-      // Wind up, slash across, recover.
-      const s = meleeSwing;
-      const arc = Math.sin(s * Math.PI);
-      px += -0.10 * arc + 0.16 * Math.sin(s * Math.PI * 2) * 0.5;
-      py += 0.08 * arc;
-      pz += -0.12 * arc;
-      rotZ += -1.5 * arc;
-      rotX += 0.85 * arc;
-      rotY += 0.5 * arc;
+    if (swapping) {
+      // Two full tumbles across the draw. The weapon is pulled *in front of you* and held
+      // a little further out rather than dropped out of frame - the point of the move is
+      // that you watch the knife turn into the gun mid-spin.
+      const dip = Math.sin(swapP * Math.PI);
+      rx += swapP * TAU * 2;
+      ry += Math.sin(swapP * TAU) * 0.35;
+      px = lerp(px, 0.10, dip);
+      py = lerp(py, -0.085, dip);
+      pz = lerp(pz, -0.54, dip);
+      scale = 1 - dip * 0.10;
+      hands = dip < 0.30;             // you let go of it while it spins
+      smear = Math.max(smear, dip);
+    } else {
+      py -= drawT / drawTime * 0.32;  // plain draw-up when there's nothing to swap from
+      rx -= drawT / drawTime * 0.55;
     }
 
-    if (scope > 0) {
+    // ---- knife slash: wind up, cut fast, recover ----
+    if (def.kind === 'melee' && !swapping) {
+      const cd = lo.cooldown > 0 ? Math.min(def.rate, lo.cooldown + back) : 0;
+      if (cd > 0) {
+        const t = 1 - cd / def.rate;
+        const dir = lo.slashDir;
+        const WIND = 0.24, CUT = 0.46;
+        let ax, ay, az, arx, ary, arz;
+        // Kept shallow vertically: a big drop on the follow-through reads as the knife
+        // falling out of the bottom of the screen rather than as a cut.
+        if (t < WIND) {
+          const e = smoothstep(0, 1, t / WIND);
+          ax = dir * 0.13 * e; ay = 0.055 * e; az = 0.06 * e;
+          arx = -0.34 * e; ary = dir * 0.46 * e; arz = dir * 1.00 * e;
+        } else if (t < CUT) {
+          // The cut itself, accelerating - this is the part that smears.
+          const u = (t - WIND) / (CUT - WIND);
+          const e = u * u;
+          ax = lerp(dir * 0.13, -dir * 0.30, e);
+          ay = lerp(0.055, -0.010, e);
+          az = lerp(0.06, -0.15, e);
+          arx = lerp(-0.34, 0.50, e);
+          ary = lerp(dir * 0.46, -dir * 0.70, e);
+          arz = lerp(dir * 1.00, -dir * 2.10, e);
+          smear = Math.max(smear, 0.45 + Math.sin(u * Math.PI) * 0.75);
+        } else {
+          const e = 1 - (1 - (t - CUT) / (1 - CUT)) ** 2;
+          ax = lerp(-dir * 0.30, 0, e); ay = lerp(-0.010, 0, e); az = lerp(-0.15, 0, e);
+          arx = lerp(0.50, 0, e); ary = lerp(-dir * 0.70, 0, e); arz = lerp(-dir * 2.10, 0, e);
+        }
+        px += ax; py += ay; pz += az; rx += arx; ry += ary; rz += arz;
+      }
+    }
+
+    // ---- idle: spinning the knife on a finger ----
+    if (this.twirlBlend > 0.001 && def.kind === 'melee' && !swapping && lo.cooldown <= 0) {
+      const tw = this.twirlBlend;
+      const ph = (this.twirlPhase - back * TWIRL_SPEED) * TAU;
+      rx += ph * tw;
+      // Brought inboard and pushed out slightly while you play with it, so the whole
+      // knife stays on screen through the spin.
+      px = lerp(px, 0.140, tw) + Math.cos(ph) * 0.028 * tw;
+      py = lerp(py, -0.105, tw) + Math.sin(ph) * 0.038 * tw;
+      pz = lerp(pz, -0.50, tw);
+      rz += Math.sin(ph * 0.5) * 0.26 * tw;
+      smear = Math.max(smear, 0.55 * tw);
+    }
+
+    if (scope > 0 && !swapping) {
       const ads = ADS[id] ?? { pos: hold.pos, rot: hold.rot };
       px = lerp(px, ads.pos[0], scope);
       py = lerp(py, ads.pos[1], scope);
       pz = lerp(pz, ads.pos[2] + kick * 0.06, scope);
-      rotX = lerp(rotX, ads.rot[0] - kick * 0.1, scope);
-      rotY = lerp(rotY, ads.rot[1], scope);
-      rotZ = lerp(rotZ, ads.rot[2], scope);
+      rx = lerp(rx, ads.rot[0] - kick * 0.1, scope);
+      ry = lerp(ry, ads.rot[1], scope);
+      rz = lerp(rz, ads.rot[2], scope);
     }
 
+    out.id = id; out.def = def; out.hold = hold;
+    out.px = px; out.py = py; out.pz = pz;
+    out.rx = rx; out.ry = ry; out.rz = rz;
+    out.scale = scale; out.hands = hands; out.smear = smear;
+    out.reload = reload; out.scope = scope;
+    return out;
+  }
+
+  /** Queue the viewmodel for this frame, plus smear ghosts when it's moving fast. */
+  renderViewmodel(r) {
+    if (!this.alive) return;
+    const lo = this.loadout;
+    if (lo.def.scope && lo.scopeT > 0.93) return;   // fully scoped: the reticle takes over
+
+    const scratch = this._poseScratch;
+    const main = this._vmPose(0, scratch[0]);
+    if (!this.game.weapons.models[main.id]) return;
+
+    // Ghost outlines trail the real weapon along its own motion. Hand-drawn animation
+    // does exactly this on a fast action, and it's the only honest way to sell speed
+    // when the thing is only being drawn twelve times a second.
+    if (main.smear > 0.06) {
+      const ghosts = main.smear > 0.65 ? 3 : 2;
+      for (let k = ghosts; k >= 1; k--) {
+        const g = this._vmPose(k * 0.020, scratch[k]);
+        if (this.game.weapons.models[g.id]) {
+          this._drawWeapon(r, g, clamp(main.smear, 0, 1) * (0.34 / k), true);
+        }
+      }
+    }
+    this._drawWeapon(r, main, 1, false);
+  }
+
+  _drawWeapon(r, pose, alpha, inkOnly) {
+    const model = this.game.weapons.models[pose.id];
+    const s = pose.scale;
     const m = this._m;
-    M4.compose(m, { x: px, y: py, z: pz }, rotY, rotX, rotZ, 1, 1, 1);
-    const opts = { objSeed: 3.7 };
-    r.vmFill(model.body.fill, m, opts);
+    M4.compose(m, { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.rx, pose.rz, s, s, s);
+    const opts = { objSeed: 3.7, alpha };
+
+    if (!inkOnly) r.vmFill(model.body.fill, m, opts);
     r.vmInk(model.body.ink, m, opts);
 
-    // Moving part: slide/bolt travels back on firing, and the magazine drops on reload.
     if (model.moving) {
-      const cyc = CYCLE[id] ?? { travel: 0.04 };
+      const cyc = CYCLE[pose.id] ?? { travel: 0.04 };
       const m2 = this._m2;
-      const back = vm.cycle * cyc.travel;
-      const magDrop = reload * (id === 'm4' || id === 'sniper' ? 0.16 : 0.12);
-      M4.compose(m2, { x: px, y: py - magDrop, z: pz + back }, rotY, rotX, rotZ, 1, 1, 1);
-      r.vmFill(model.moving.fill, m2, opts);
+      const back = this.vm.cycle * cyc.travel;
+      const magDrop = pose.reload * (pose.id === 'm4' || pose.id === 'sniper' ? 0.16 : 0.12);
+      M4.compose(m2, { x: pose.px, y: pose.py - magDrop, z: pose.pz + back }, pose.ry, pose.rx, pose.rz, s, s, s);
+      if (!inkOnly) r.vmFill(model.moving.fill, m2, opts);
       r.vmInk(model.moving.ink, m2, opts);
     }
 
-    // --- hands and forearms
-    const hands = this.game.weapons;
-    const local = this._m2;
-    const gripWorld = applyMat(m, hold.grip);
-    M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, rotY, rotX + 0.35, rotZ, 1, 1, 1);
-    r.vmFill(hands.hand.fill, local, opts);
-    r.vmInk(hands.hand.ink, local, opts);
-    this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22]);
+    if (inkOnly) return;
 
-    if (hold.support && scope < 0.8) {
-      const sw = applyMat(m, hold.support);
-      M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, rotY - 0.3, rotX + 0.5, rotZ, 1, 1, 1);
+    // --- hands and forearms
+    if (pose.hands) {
+      const hands = this.game.weapons;
+      const local = this._m3;
+      const gripWorld = applyMat(m, pose.hold.grip);
+      M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.rx + 0.35, pose.rz, 1, 1, 1);
       r.vmFill(hands.hand.fill, local, opts);
       r.vmInk(hands.hand.ink, local, opts);
-      this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22]);
+      this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22]);
+
+      if (pose.hold.support && pose.scope < 0.8) {
+        const sw = applyMat(m, pose.hold.support);
+        M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.rx + 0.5, pose.rz, 1, 1, 1);
+        r.vmFill(hands.hand.fill, local, opts);
+        r.vmInk(hands.hand.ink, local, opts);
+        this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22]);
+      }
     }
 
     // --- muzzle flash, drawn in the viewmodel pass so the gun can't hide it
-    if (this.flashFrames > 0 && def.kind === 'gun' && this.flashMesh) {
-      const mz = applyMat(m, MUZZLE[id]);
-      const s = (def.id === 'sniper' ? 0.5 : def.id === 'm4' ? 0.34 : 0.30) * (0.85 + this.rng.next() * 0.4);
-      M4.compose(local, { x: mz[0], y: mz[1], z: mz[2] }, rotY, rotX, this.game.animFrame * 1.7, s, s, s);
-      r.vmFill(this.flashMesh.fill, local, opts);
-      r.vmInk(this.flashMesh.ink, local, opts);
+    if (this.flashFrames > 0 && pose.def.kind === 'gun' && this.flashMesh) {
+      const mz = applyMat(m, MUZZLE[pose.id]);
+      const size = (pose.def.id === 'sniper' ? 0.5 : pose.def.id === 'm4' ? 0.34 : 0.30) * (0.85 + this.rng.next() * 0.4);
+      M4.compose(this._m3, { x: mz[0], y: mz[1], z: mz[2] }, pose.ry, pose.rx, this.game.animFrame * 1.7, size, size, size);
+      r.vmFill(this.flashMesh.fill, this._m3, opts);
+      r.vmInk(this.flashMesh.ink, this._m3, opts);
     }
   }
 
@@ -508,6 +686,14 @@ export class Player {
     r.vmFill(hands.arm.fill, m, { objSeed: 8.1 });
     r.vmInk(hands.arm.ink, m, { objSeed: 8.1 });
   }
+}
+
+function makePose() {
+  return {
+    id: 'pistol', def: null, hold: null,
+    px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0,
+    scale: 1, hands: true, smear: 0, reload: 0, scope: 0,
+  };
 }
 
 /** Transform a local point by a mat4, returning a plain array. */

@@ -119,6 +119,7 @@ function main() {
   });
   $('#btn-again').addEventListener('click', () => {
     Sfx.uiClick();
+    hideAll();              // never leave the popup up, whatever setPaused decides to do
     game.matchOver = false;
     game.newMatch();
     startPlaying();

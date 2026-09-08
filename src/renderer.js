@@ -6,6 +6,7 @@ import { createGL, Program, RenderTarget, textureFromCanvas } from './gl.js';
 import { unitQuadMesh, QUAD_LAYOUT } from './geom.js';
 import * as S from './shaders.js';
 import { M3, M4, V, clamp } from './math.js';
+import { Frustum } from './frustum.js';
 import { makePaperTexture, makeHatchTexture, makeCrayonTexture, makeSplatAtlas, makeFlashTexture, makeSmudgeTexture, makeStreakTexture, makePuffTexture } from './textures.js';
 
 export const MAT = {
@@ -45,7 +46,7 @@ class CmdPool {
 
 const makeMeshCmd = () => ({
   mesh: null, model: M4.create(), nrm: M3.create(),
-  override: [0, 0, 0, 0], objSeed: 0, widthScale: 1, range: null,
+  override: [0, 0, 0, 0], objSeed: 0, widthScale: 1, alpha: 1,
 });
 const makeQuadCmd = () => ({
   tex: null, model: M4.create(), tint: [0, 0, 0, 1],
@@ -100,6 +101,9 @@ export class Renderer {
     this.colorDir = [0.82, 0.57];
     this.colorSlope = 0.05;
 
+    this.frustum = new Frustum();
+    this.stats = { chunks: 0, chunksDrawn: 0, actors: 0, actorsDrawn: 0, props: 0, propsDrawn: 0 };
+
     this.eye = V.make();
     this.seed = 0;
     this.fogK = 0.0040;
@@ -138,8 +142,12 @@ export class Renderer {
     M4.mul(this.viewProj, this.proj, this.view);
     // Viewmodel gets its own tighter frustum so the gun never pokes through walls.
     M4.perspective(this.projVM, 62 * Math.PI / 180, aspect, 0.012, 12);
+    this.frustum.fromMatrix(this.viewProj);
     V.copy(this.eye, camera.pos);
     this.seed = animSeed;
+    this.stats.chunks = this.stats.chunksDrawn = 0;
+    this.stats.actors = this.stats.actorsDrawn = 0;
+    this.stats.props = this.stats.propsDrawn = 0;
 
     this.fills.reset(); this.inks.reset(); this.quads.reset();
     this.vmFills.reset(); this.vmInks.reset();
@@ -156,7 +164,7 @@ export class Renderer {
     else c.override[3] = 0;
     c.objSeed = opts?.objSeed ?? 0;
     c.widthScale = opts?.widthScale ?? 1;
-    c.range = opts?.range ?? null;
+    c.alpha = opts?.alpha ?? 1;
   }
 
   fill(mesh, model, opts) { this._pushMesh(this.fills, mesh, model, opts); }
@@ -224,13 +232,16 @@ export class Renderer {
       .set1f('uSeed', this.seed)
       .set1f('uWobble', 1.15 * this.inkAmount)
       .set1f('uDepthBias', depthBias)
-      .set3f('uInkColor', INK_RGB[0], INK_RGB[1], INK_RGB[2])
-      .set1f('uInkAlpha', 0.94);
+      .set3f('uInkColor', INK_RGB[0], INK_RGB[1], INK_RGB[2]);
   }
 
   _runInks(pool, p, baseScale) {
     const gl = this.gl;
+    let lastAlpha = -1;
     for (const c of pool) {
+      // Per-draw alpha is what smear ghosts ride on: the same outline drawn a few times
+      // along the motion, each fainter than the last.
+      if (c.alpha !== lastAlpha) { p.set1f('uInkAlpha', 0.94 * c.alpha); lastAlpha = c.alpha; }
       p.setMat4('uModel', c.model).set1f('uObjSeed', c.objSeed)
         .set1f('uInkScale', baseScale * c.widthScale);
       c.mesh.draw(gl.TRIANGLES);
@@ -287,10 +298,13 @@ export class Renderer {
 
     // --- viewmodel on a cleared depth buffer
     if (this.vmFills.len || this.vmInks.len) {
+      // Depth writes have to be back on before the clear - the ink pass left them masked,
+      // and a masked depth clear silently does nothing, which let walls and the floor cut
+      // straight through the player's hands.
+      gl.depthMask(true);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       const origin = V.make(0, 0, 0);
       gl.disable(gl.BLEND);
-      gl.depthMask(true);
       gl.enable(gl.CULL_FACE);
       const pf2 = this.progFill.use();
       this._setFillFrameUniforms(pf2, this.projVM, [this.eye.x, this.eye.y, this.eye.z], 0, origin, 1);
@@ -321,6 +335,9 @@ export class Renderer {
       .set1f('uScopeR', post?.scopeRadius ?? 0.34)
       .set1f('uDamage', clamp(post?.damage ?? 0, 0, 1))
       .set1f('uDeath', clamp(post?.death ?? 0, 0, 1))
+      .set1f('uImpact', clamp(post?.impact ?? 0, 0, 1))
+      .set2f('uImpactUv', post?.impactUv?.[0] ?? 0.5, post?.impactUv?.[1] ?? 0.5)
+      .set1f('uImpactR', post?.impactR ?? 0.1)
       .set3f('uPaperColor', PAPER_RGB[0], PAPER_RGB[1], PAPER_RGB[2]);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

@@ -17,7 +17,7 @@
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT } from './combat.js';
 import { WEAPONS, MUZZLE, randomGunId } from './weapons.js';
 import { CharacterRig, weaponTransform, SHIRT_MATS } from './actors.js';
-import { M4, V, Rng, clamp, lerp, damp, dirFrom, yawOf, approachAngle, DEG, TAU } from './math.js';
+import { M4, V, Rng, clamp, lerp, damp, dirFrom, yawOf, angleTo, wrapAngle, approachAngle, DEG, TAU } from './math.js';
 import { Sfx } from './audio.js';
 
 const CHEST_Y = 1.18;
@@ -57,11 +57,12 @@ export class Bot {
     // ---- personality -----------------------------------------------------
     // Skill spreads the squad out: one of them is genuinely sharp, one is a liability.
     this.skill = clamp(0.34 + index * 0.09 + r.range(-0.09, 0.09), 0.22, 0.88);
-    this.reactionTime = lerp(0.44, 0.19, this.skill) * r.range(0.86, 1.16);
-    this.turnSpeed = lerp(3.4, 7.2, this.skill) * r.range(0.9, 1.1);       // rad/s
-    this.lockTime = lerp(1.5, 0.62, this.skill);                            // to settle on target
-    this.errStart = lerp(8.2, 3.4, this.skill);                             // degrees
-    this.errSettled = lerp(2.7, 0.85, this.skill);
+    this.reactionTime = lerp(0.52, 0.24, this.skill) * r.range(0.86, 1.16);
+    this.turnSpeed = lerp(2.4, 4.8, this.skill) * r.range(0.9, 1.1);        // rad/s ceiling
+    this.turnAccel = this.turnSpeed * r.range(4.5, 6.5);                    // rad/s^2
+    this.lockTime = lerp(2.6, 1.1, this.skill);                             // to settle on target
+    this.errStart = lerp(12.0, 5.5, this.skill);                            // degrees
+    this.errSettled = lerp(3.6, 1.4, this.skill);
     this.aggression = r.range(0.3, 0.92);
     this.strafePeriod = r.range(0.7, 1.7);
     this.headshotBias = lerp(0.05, 0.42, this.skill);
@@ -97,6 +98,8 @@ export class Bot {
     this.perceiveTimer = r.range(0, 0.12);
     this.strafeDir = r.sign();
     this.strafeTimer = r.range(0, this.strafePeriod);
+    this.turnVelYaw = 0;
+    this.turnVelPitch = 0;
     this.shotsInBurst = 0;
     this.burstPause = 0;
     this.fireDelay = 0;
@@ -344,6 +347,8 @@ export class Bot {
       }
       this.pitch = damp(this.pitch, 0, 5, dt);
       this.aimAmt = damp(this.aimAmt, 0, 6, dt);
+      this.turnVelYaw *= 0.85;
+      this.turnVelPitch *= 0.85;
       return;
     }
 
@@ -362,9 +367,13 @@ export class Bot {
     const wantYaw = yawOf(dx, dz);
     const wantPitch = Math.atan2(dy, horiz);
 
-    // Error amplitude collapses as they settle on you.
+    // Error amplitude collapses as they settle on you - but never to zero, and it grows
+    // with range and with how hard they're running. A bot sprinting at a target thirty
+    // metres away is genuinely bad at this.
     const settle = clamp(this.timeOnTarget / this.lockTime, 0, 1);
-    const amp = lerp(this.errStart, this.errSettled, settle * settle) * DEG;
+    const rangeK = 1 + clamp((dist - 10) / 45, 0, 1) * 0.9;
+    const runK = 1 + clamp(Math.hypot(this.vel.x, this.vel.z) / 5.15, 0, 1) * 0.45;
+    const amp = lerp(this.errStart, this.errSettled, settle * settle) * DEG * rangeK * runK;
     const w = this.wp, f = this.wf;
     const wanderY = Math.sin(time * f[0] + w[0]) * 0.62 + Math.sin(time * f[1] + w[1]) * 0.38;
     const wanderP = Math.sin(time * f[2] + w[2]) * 0.62 + Math.sin(time * f[3] + w[3]) * 0.38;
@@ -375,11 +384,21 @@ export class Bot {
     const targetYaw = wantYaw + wanderY * amp + (this.rng.next() - 0.5) * flinchAmp;
     const targetPitch = wantPitch + wanderP * amp * 0.6 + (this.rng.next() - 0.5) * flinchAmp;
 
-    // A human flicks fast at first, then tracks slowly. Same here.
-    const flick = 1 + 2.4 * Math.exp(-this.timeOnTarget * 3.2);
-    const rate = this.turnSpeed * flick * (this.alertTimer > 0 ? 0.25 : 1) * dt;
-    this.yaw = approachAngle(this.yaw, targetYaw, rate);
-    this.pitch = clamp(approachAngle(this.pitch, targetPitch, rate), -1.4, 1.4);
+    // Turning has inertia. Rather than snapping the facing at a target the bot builds up
+    // an angular velocity and has to bleed it off again, so it overshoots a flick and
+    // drifts past a target that changes direction - which is the whole difference between
+    // a person aiming and a turret being pointed.
+    const flick = 1 + 1.6 * Math.exp(-this.timeOnTarget * 3.0);
+    const maxRate = this.turnSpeed * flick * (this.alertTimer > 0 ? 0.25 : 1);
+    const accel = this.turnAccel * dt;
+
+    const wantYawRate = clamp(angleTo(this.yaw, targetYaw) / Math.max(dt, 1e-4), -maxRate, maxRate);
+    this.turnVelYaw += clamp(wantYawRate - this.turnVelYaw, -accel, accel);
+    this.yaw = wrapAngle(this.yaw + this.turnVelYaw * dt);
+
+    const wantPitchRate = clamp((targetPitch - this.pitch) / Math.max(dt, 1e-4), -maxRate, maxRate);
+    this.turnVelPitch += clamp(wantPitchRate - this.turnVelPitch, -accel, accel);
+    this.pitch = clamp(this.pitch + this.turnVelPitch * dt, -1.4, 1.4);
 
     if (this.targetVisible && this.alertTimer <= 0) this.timeOnTarget += dt;
     else this.timeOnTarget = Math.max(0, this.timeOnTarget - dt * 0.7);
@@ -440,7 +459,7 @@ export class Bot {
     const dx = t.pos.x - this.pos.x, dy = (t.pos.y + CHEST_Y) - (this.pos.y + EYE_HEIGHT), dz = t.pos.z - this.pos.z;
     const dl = Math.hypot(dx, dy, dz) || 1;
     const dot = (dx * fwd.x + dy * fwd.y + dz * fwd.z) / dl;
-    const cone = Math.cos(lerp(9, 3.5, this.skill) * DEG);
+    const cone = Math.cos(lerp(12, 5.0, this.skill) * DEG);
     if (dot < cone) return;
 
     // Snipers take a breath before each shot; that's their whole personality.

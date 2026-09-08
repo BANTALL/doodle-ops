@@ -34,7 +34,7 @@ You carry the knife plus **one** gun. Picking a new gun up drops the one in your
 
 | | damage | rate of fire | magazine | notes |
 |---|---|---|---|---|
-| **Knife** | 42 | fast | — | 1.6× from behind, and you move quicker holding it |
+| **Knife** | 42 | fast | — | long reach, 1.6× from behind, and you move quicker holding it |
 | **Pistol** | 26 | slow | 12 | the reliable middle |
 | **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope; two body shots or one head |
@@ -42,6 +42,16 @@ You carry the knife plus **one** gun. Picking a new gun up drops the one in your
 Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
 a random gun. Guns dropped by the dead fade off the page after about twenty seconds, so the
 crates stay worth opening; guns from crates stay put.
+
+## Running
+
+Keep running forward and you wind up: momentum builds over about four seconds to a **+55%
+speed boost**, and the view stretches a little as it comes on. It is fragile on purpose —
+reversing, stopping, or putting a shoulder into a wall dumps all of it, and sidestepping at
+speed both throttles the build and shaves 10% off the boost every fifth of a second, so a
+held diagonal settles around a third of top speed instead of pinning at the ceiling.
+
+Speed lines scribble in from the edges of the screen once the boost is worth having.
 
 ## The bots
 
@@ -57,6 +67,21 @@ that work:
 - **They move for their own reasons.** Strafing runs on a lazy timer, they back off to
   reload, they push when they think they're ahead. They are not reading your bullets and
   dodging them, and you can feel that they aren't.
+
+Turning has inertia: a bot builds up angular velocity and has to bleed it off again, so it
+overshoots a flick and drifts past a target that changes direction. That, more than
+anything, is the difference between a person aiming and a turret being pointed.
+
+Over a three-minute soak of roughly 1700 bot shots that lands at:
+
+| range | hit rate |
+|---|---|
+| under 12 m | 63% |
+| 12–30 m | 31% |
+| over 30 m | 2% |
+
+Headshots are 0.3% of their hits — they are aiming at you, not at your head. Lethal in a
+room, hopeless across the map.
 
 The five of them are rolled with different skill, reaction time, turn speed, aggression and
 preferred range, so one is genuinely sharp and one is a liability. They also loot, break
@@ -76,6 +101,32 @@ animation, and here it falls out of the update schedule rather than being faked.
 
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
+
+**Smear frames.** The viewmodel pose is a pure function of the weapon timers, so the same
+pose can be asked for a few milliseconds "ago" and drawn as a fainter outline behind the
+real one. Fast actions trail; slow ones don't. It's what hand-drawn animation does on a
+fast action, and at twelve frames a second it's the only honest way to sell speed.
+
+**Weapon swaps** twirl. The weapon is pulled in front of you and tumbles twice, and halfway
+through — while it's spinning fastest — the old one becomes the new one, so you read it as
+the knife *turning into* the gun.
+
+**The knife** has a wind-up, a fast cut that smears, and a recovery, alternating sides each
+swing. Stand still holding it for three seconds and you start spinning it on a finger until
+something interrupts you.
+
+**Sniper impact frame.** A sniper round that connects blacks out the page except for a
+ragged white hole blown open at the point of impact. Real-time driven, so it lasts 0.65s at
+any frame rate: a short hold at full strength, then a fade so you get your view back.
+
+**Culling.** The level is built as chunks of 6×6 cells, each with its own meshes and
+bounding box, because a single map-sized mesh can only ever be drawn whole. Frustum culling
+alone still draws every room behind the wall you're facing, so the renderer also floods
+outward from the camera's cell through *open* cells only, the way a portal-based renderer
+walks a level — a wall stops the flood dead, so rooms with no line of sight are never
+reached. It's conservative in the safe direction: it can mark a chunk you can't quite see,
+but it cannot miss one you can. Typically 4–12 of 25 chunks survive, taking draw calls from
+~126 down to 8–70. Bots, crates, pickups, decals and particles get a sphere test on top.
 
 The rest of the pipeline:
 
@@ -138,6 +189,7 @@ src/
   audio.js      procedural WebAudio SFX
   input.js      pointer lock, keys, mouse
   settings.js   persisted settings
+  frustum.js    view frustum planes for culling
   math.js       vectors, matrices, RNG
 ```
 

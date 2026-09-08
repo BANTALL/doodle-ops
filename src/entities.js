@@ -304,10 +304,14 @@ export class Entities {
   render(r, cam) {
     const m = this._m;
     const frame = this.animFrame;
+    const fr = r.frustum;
 
     // Crates. A hit makes them jolt for a couple of animation frames.
     for (const c of this.crates) {
       if (!c.alive) continue;
+      r.stats.props++;
+      if (!fr.sphere(c.pos.x, c.pos.y, c.pos.z, c.size)) continue;
+      r.stats.propsDrawn++;
       const sh = c.shake > 0 ? Math.sin(frame * 2.7 + c.pos.x) * c.shake * 0.09 : 0;
       const p = this._tmp;
       V.set(p, c.pos.x + sh, c.pos.y, c.pos.z + sh * 0.6);
@@ -321,6 +325,9 @@ export class Entities {
     for (const p of this.pickups) {
       const model = this.models.models[p.gunId];
       if (!model) continue;
+      r.stats.props++;
+      if (!fr.sphere(p.pos.x, p.pos.y + 0.15, p.pos.z, 1.1)) continue;
+      r.stats.propsDrawn++;
       // Flicker out at the end of its life, one animation frame on, one off.
       if (p.ttl < PICKUP_BLINK && (frame & 1)) continue;
       const bobT = frame / 12 + p.spin;
@@ -341,6 +348,7 @@ export class Entities {
 
     // Paper shards.
     for (const s of this.shards) {
+      if (!fr.sphere(s.pos.x, s.pos.y, s.pos.z, s.size)) continue;
       const fade = clamp(s.life / 0.6, 0, 1);
       M4.compose(m, s.pos, s.rot[1], s.rot[0], s.rot[2], s.size, s.size * 1.2, s.size);
       const opts = { objSeed: s.spin[0] * 3.7 };
@@ -349,6 +357,7 @@ export class Entities {
 
     // Bullet holes.
     for (const d of this.decals) {
+      if (!fr.sphere(d.pos.x, d.pos.y, d.pos.z, d.size)) continue;
       decalMatrix(m, d.pos, d.normal, d.size, d.roll);
       const fade = clamp(d.life / 8, 0, 1);
       r.quad(r.texSplat, m, [0.16, 0.15, 0.19, 0.85 * fade], d.uvOff, [0.5, 0.5]);
@@ -356,14 +365,18 @@ export class Entities {
 
     // Tracers + flashes + puffs.
     for (const t of this.tracers) {
+      const mx = (t.from.x + t.to.x) * 0.5, my = (t.from.y + t.to.y) * 0.5, mz = (t.from.z + t.to.z) * 0.5;
+      if (!fr.sphere(mx, my, mz, V.dist(t.from, t.to) * 0.5 + 0.2)) continue;
       segmentBillboard(m, t.from, t.to, cam.pos, t.width);
       r.quad(r.texStreak, m, [0.18, 0.17, 0.22, 0.78]);
     }
     for (const f of this.flashes) {
+      if (!fr.sphere(f.pos.x, f.pos.y, f.pos.z, f.size)) continue;
       billboard(m, f.pos, f.size, cam.right, cam.up, cam.fwd, f.roll);
       r.quad(r.texFlash, m, [1.0, 0.93, 0.62, 0.95]);
     }
     for (const p of this.puffs) {
+      if (!fr.sphere(p.pos.x, p.pos.y, p.pos.z, p.size)) continue;
       billboard(m, p.pos, p.size, cam.right, cam.up, cam.fwd, p.roll);
       r.quad(r.texPuff, m, [0.42, 0.40, 0.38, 0.55 / (1 + p.age)]);
     }
