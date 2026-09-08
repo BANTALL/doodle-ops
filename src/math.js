@@ -155,6 +155,20 @@ export const M4 = {
     return o3;
   },
 
+  /** Standard look-at view matrix. Used to aim the shadow camera down at the level. */
+  lookAt(o, eye, target, up) {
+    let zx = eye.x - target.x, zy = eye.y - target.y, zz = eye.z - target.z;
+    let zl = Math.hypot(zx, zy, zz) || 1; zx /= zl; zy /= zl; zz /= zl;
+    let xx = up.y * zz - up.z * zy, xy = up.z * zx - up.x * zz, xz = up.x * zy - up.y * zx;
+    const xl = Math.hypot(xx, xy, xz) || 1; xx /= xl; xy /= xl; xz /= xl;
+    const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    o[0] = xx; o[4] = xy; o[8] = xz;  o[12] = -(xx * eye.x + xy * eye.y + xz * eye.z);
+    o[1] = yx; o[5] = yy; o[9] = yz;  o[13] = -(yx * eye.x + yy * eye.y + yz * eye.z);
+    o[2] = zx; o[6] = zy; o[10] = zz; o[14] = -(zx * eye.x + zy * eye.y + zz * eye.z);
+    o[3] = 0;  o[7] = 0;  o[11] = 0;  o[15] = 1;
+    return o;
+  },
+
   /** Project a world point with a view-projection matrix. Returns {x,y} in NDC plus w. */
   projectPoint(m, p, out = { x: 0, y: 0, w: 0 }) {
     const w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];

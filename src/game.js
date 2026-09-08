@@ -2,7 +2,7 @@
 // a full-rate simulation clock and a 12fps animation clock everything is *drawn* on.
 
 import { Renderer } from './renderer.js';
-import { GameMap, WALL_H } from './map.js';
+import { GameMap, WALL_H, CELL } from './map.js';
 import { Entities } from './entities.js';
 import { Player } from './player.js';
 import { Bot } from './bots.js';
@@ -565,8 +565,65 @@ export class Game {
 
   // ------------------------------------------------------------ render
 
+  /** The eight ceiling panels nearest the player, for the lamp falloff term. */
+  _updateLights() {
+    const r = this.renderer;
+    if (!r.fancy) { r.lightCount = 0; return; }
+    const lights = this.map.lights;
+    const buf = this._lightBuf || (this._lightBuf = new Float32Array(8 * 4));
+    const best = this._lightBest || (this._lightBest = []);
+    best.length = 0;
+    const px = this.camera.pos.x, pz = this.camera.pos.z;
+    for (let i = 0; i < lights.length; i++) {
+      const L = lights[i];
+      const x = (L.i + 0.5) * CELL, z = (L.j + 0.5) * CELL;
+      const d = (x - px) ** 2 + (z - pz) ** 2;
+      if (d > 26 * 26) continue;
+      best.push({ d, x, z });
+    }
+    best.sort((a, b) => a.d - b.d);
+    const n = Math.min(8, best.length);
+    for (let i = 0; i < n; i++) {
+      buf[i * 4] = best[i].x;
+      buf[i * 4 + 1] = this.map.wallH - 0.10;
+      buf[i * 4 + 2] = best[i].z;
+      buf[i * 4 + 3] = 11.0;               // reach
+    }
+    r.setLights(buf, n);
+  }
+
+  /** Everything that should show up in the shadow map. */
+  _queueShadowCasters(r) {
+    if (!r.fancy) return;
+    const px = this.camera.pos.x, pz = this.camera.pos.z;
+    const R = 30;
+    for (const c of this.worldMesh.chunks) {
+      if (c.max[0] < px - R || c.min[0] > px + R || c.max[2] < pz - R || c.min[2] > pz + R) continue;
+      r.shadow(c.fill, null);
+    }
+    const m = this._m;
+    for (const crate of this.entities.crates) {
+      if (!crate.alive) continue;
+      if (Math.abs(crate.pos.x - px) > R || Math.abs(crate.pos.z - pz) > R) continue;
+      M4.compose(m, crate.pos, crate.yaw, 0, 0, crate.size, crate.size, crate.size);
+      r.shadow(this.entities.crateMesh.fill, m);
+    }
+    for (const b of this.bots) {
+      if (!b.rig.fill) continue;
+      if (Math.abs(b.animPos.x - px) > R || Math.abs(b.animPos.z - pz) > R) continue;
+      M4.compose(m, b.animPos, b.animYaw, 0, 0, 1, 1, 1);
+      r.shadow(b.rig.fill, m);
+    }
+    for (const t of this.turrets) {
+      if (!t.alive) continue;
+      M4.compose(m, t.pos, 0, 0, 0, 1.3, 1.3, 1.3);
+      r.shadow(this.skillMeshes.turretBase.fill, m);
+    }
+  }
+
   render() {
     const r = this.renderer;
+    r.fancy = !!settings.fancy;
     r.inkAmount = settings.inkAmount;
     // The wobble seed only changes on an animation step, so lines hold still between them.
     r.beginFrame(this.camera, this.animFrame * 0.7351);
@@ -581,6 +638,9 @@ export class Game {
       r.fill(chunks[i].fill, null, { objSeed: 0 });
       r.ink(chunks[i].ink, null, { objSeed: 0 });
     }
+
+    this._updateLights();
+    this._queueShadowCasters(r);
 
     this.entities.render(r, this.camera);
     for (const sh of this.shields) sh.render(r, this.skillMeshes);

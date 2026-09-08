@@ -174,6 +174,11 @@ uniform vec3 uMaskOffset;   // lets eye-space geometry (the viewmodel) sample th
 uniform float uAoEnable;
 uniform float uForceColor;  // 1 = always coloured, regardless of which half of the map we're in
 uniform float uEntityColor; // >= 0 overrides the mask with a single value for the whole object
+uniform float uFancy;          // 0 = flat look, 1 = shadows and lamp falloff
+uniform mat4 uShadowMat;
+uniform highp sampler2DShadow uShadowMap;
+uniform int uLightCount;
+uniform vec4 uLights[8];       // xyz = panel centre, w = reach
 
 out vec4 fragColor;
 
@@ -261,11 +266,49 @@ void main(){
   vec2 huv = (gl_FragCoord.xy + hoff) / uHatchScale;
   vec3 hatch = texture(uHatch, huv).rgb;
 
+  // ---- realtime shadows + ceiling panel falloff -------------------------
+  // Both are driven by the light panels: the shadow map looks down the average direction
+  // of a ceiling full of them, and the falloff term is the nearest few panels themselves,
+  // so standing under one is brighter than standing between them.
+  float shadow = 1.0;
+  if (uFancy > 0.5) {
+    vec4 sc = uShadowMat * vec4(vWorld + N * 0.06, 1.0);
+    vec3 pc = sc.xyz / sc.w * 0.5 + 0.5;
+    if (pc.x > 0.001 && pc.x < 0.999 && pc.y > 0.001 && pc.y < 0.999 && pc.z < 1.0) {
+      vec2 texel = vec2(1.0 / 1024.0);
+      float sum = 0.0;
+      for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+          sum += texture(uShadowMap, vec3(pc.xy + vec2(float(x), float(y)) * texel, pc.z - 0.0016));
+        }
+      }
+      shadow = sum / 9.0;
+      // Fade the shadow out at the edge of the map so it doesn't end on a hard line.
+      vec2 e = min(pc.xy, 1.0 - pc.xy);
+      shadow = mix(1.0, shadow, smoothstep(0.0, 0.06, min(e.x, e.y)));
+    }
+
+    float lamp = 0.0;
+    for (int i = 0; i < 8; i++) {
+      if (i >= uLightCount) break;
+      vec3 d = uLights[i].xyz - vWorld;
+      float dist = length(d);
+      float falloff = max(0.0, 1.0 - dist / uLights[i].w);
+      lamp += falloff * falloff * (0.35 + 0.65 * max(dot(N, d / max(dist, 1e-3)), 0.0));
+    }
+    // Capped at 1: paper cannot get brighter than paper, so the contrast has to come from
+    // darkening what the panels don't reach rather than blowing out what they do.
+    light *= min(1.0, 0.80 + clamp(lamp, 0.0, 1.0) * 0.24) * mix(0.55, 1.0, shadow);
+  }
+
   float shadeAmt = 1.0 - smoothstep(0.68, 1.0, light);
   float h = 0.0;
   h = max(h, hatch.r * smoothstep(0.16, 0.52, shadeAmt));
   h = max(h, hatch.g * smoothstep(0.50, 0.82, shadeAmt));
   h = max(h, hatch.b * smoothstep(0.80, 1.00, shadeAmt));
+
+  // A cast shadow is drawn, not dimmed: it picks up extra hatching of its own.
+  h = max(h, hatch.g * (1.0 - shadow) * 0.85);
 
   vec3 col = base * mix(1.0, 0.86, shadeAmt);
   col = mix(col, mix(uInkColor, col * 0.6, 0.45), h * 0.30);
@@ -459,6 +502,14 @@ uniform float uImpact;     // 0..1 sniper impact frame
 uniform vec2  uImpactUv;
 uniform float uImpactR;
 uniform vec3 uPaperColor;
+uniform float uFancy;
+uniform sampler2D uBlur;
+uniform highp sampler2D uDepth;
+uniform float uNear;
+uniform float uFar;
+uniform float uFocus;
+uniform float uBloom;
+uniform float uSaturation;
 
 out vec4 fragColor;
 
@@ -468,6 +519,29 @@ void main(){
   vec2 centered = (px - uRes * 0.5) / min(uRes.x, uRes.y);
 
   vec3 col = texture(uScene, uv).rgb;
+
+  if (uFancy > 0.5) {
+    vec3 blurred = texture(uBlur, uv).rgb;
+
+    // Depth of field: far things go soft, near things stay sharp. The viewmodel is drawn
+    // through a much tighter frustum, so its depths land right at the near plane and it
+    // is never blurred - which is what we want anyway.
+    float d = texture(uDepth, uv).r * 2.0 - 1.0;
+    float linear = (2.0 * uNear * uFar) / (uFar + uNear - d * (uFar - uNear));
+    float coc = smoothstep(uFocus, uFocus * 4.0, linear);
+    col = mix(col, blurred, clamp(coc, 0.0, 0.72));
+
+    // Bloom, taken off the same blurred image. Thresholded after the blur, which bleeds a
+    // little, but the whole page is near-white so a strict bright pass finds nothing.
+    vec3 bright = max(blurred - vec3(0.80), vec3(0.0)) / 0.2;
+    col += bright * uBloom;
+
+    // Balance: pull the saturation back up that the bloom washed out, and keep the paper
+    // from clipping to flat white.
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(vec3(luma), col, uSaturation);
+    col = col / (1.0 + max(col - 1.0, vec3(0.0)) * 0.85);
+  }
 
   // Paper stock multiplied over everything, wobbling a touch each animation step so the
   // grain feels re-drawn rather than laminated on.
@@ -524,3 +598,45 @@ void main(){
 
   fragColor = vec4(col, 1.0);
 }`;
+
+// ---------------------------------------------------------------- shadow map
+
+export const SHADOW_VS = /* glsl */`#version 300 es
+layout(location = 0) in vec3 aPos;
+uniform mat4 uLightViewProj;
+uniform mat4 uModel;
+void main(){
+  gl_Position = uLightViewProj * uModel * vec4(aPos, 1.0);
+}`;
+
+export const SHADOW_FS = /* glsl */`#version 300 es
+precision highp float;
+void main(){}`;
+
+// ---------------------------------------------------------------- blur chain
+// One half-resolution blur serves two jobs: the out-of-focus image for depth of field,
+// and (thresholded) the bloom source. Two separate chains would look marginally better
+// and cost twice as much for a game drawn in pencil.
+
+export const BLUR_FS = /* glsl */`#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;      // direction * 1/resolution
+out vec4 fragColor;
+void main(){
+  // 9-tap gaussian, linear-sampled at 5 positions.
+  vec3 c = texture(uTex, vUv).rgb * 0.2270270270;
+  c += texture(uTex, vUv + uTexel * 1.3846153846).rgb * 0.3162162162;
+  c += texture(uTex, vUv - uTexel * 1.3846153846).rgb * 0.3162162162;
+  c += texture(uTex, vUv + uTexel * 3.2307692308).rgb * 0.0702702703;
+  c += texture(uTex, vUv - uTexel * 3.2307692308).rgb * 0.0702702703;
+  fragColor = vec4(c, 1.0);
+}`;
+
+export const COPY_FS = /* glsl */`#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+out vec4 fragColor;
+void main(){ fragColor = vec4(texture(uTex, vUv).rgb, 1.0); }`;

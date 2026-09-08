@@ -110,6 +110,9 @@ export class Player {
     this.lastAttacker = null;
     this.momentum = 0;
     this.strafeBleedT = 0;
+    // Eased toward the map's colour mask, exactly like the bots: your own hands and gun
+    // drain of colour as you cross into the uncoloured half, over about a second.
+    this.colorAmt = 1;
     this.idleTimer = 0;
     this.twirlActive = false;
     this.twirlBlend = 0;
@@ -304,6 +307,7 @@ export class Player {
     // --- interaction highlight
     this._updateHighlight(input);
 
+    this.colorAmt = damp(this.colorAmt, game.map.colorAmountAt(this.pos.x, this.pos.z), 1.8, dt);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 1.9);
   }
 
@@ -740,7 +744,7 @@ export class Player {
     const s = pose.scale;
     const m = this._m;
     M4.compose(m, { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.rx, pose.rz, s, s, s);
-    const opts = { objSeed: 3.7, alpha };
+    const opts = { objSeed: 3.7, alpha, colorAmt: this.colorAmt };
 
     if (!inkOnly) r.vmFill(model.body.fill, m, opts);
     r.vmInk(model.body.ink, m, opts);
@@ -793,7 +797,7 @@ export class Player {
   _drawArm(r, hands, handWorld, shoulder) {
     const m = M4.create();
     aimMatrix(m, handWorld, shoulder);
-    r.vmFill(hands.arm.fill, m, { objSeed: 8.1 });
+    r.vmFill(hands.arm.fill, m, { objSeed: 8.1, colorAmt: this.colorAmt });
     r.vmInk(hands.arm.ink, m, { objSeed: 8.1 });
   }
 }

@@ -40,8 +40,32 @@ You carry the knife plus **one** gun. Picking a new gun up drops the one in your
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope; two body shots or one head |
 
 Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
-a random gun. Guns dropped by the dead fade off the page after about twenty seconds, so the
+a random gun, plus a heart 75% of the time (worth 2 HP, walked over rather than prompted
+for, by bots as well as you). Guns dropped by the dead fade off the page after about twenty seconds, so the
 crates stay worth opening; guns from crates stay put.
+
+## Doodlers
+
+You pick a class before the match. Skill is on `Q`; weapons stay on scroll and `1`/`2`.
+
+| | statline | skill |
+|---|---|---|
+| **Normie** | 100 HP, normal speed, +55% boost cap | — |
+| **Guardian** | 100 HP, −10% speed, +40% boost cap | a paper shield that floats in front of you |
+| **Mechanist** | 85 HP, normal speed, +55% boost cap | scribbled turrets, two per cooldown |
+| **Runner** | 90 HP, +10% speed, +70% boost cap | a forward slide every 4s |
+
+The **guardian's** shield hangs half a second behind everything you do — it reads its
+owner's pose out of a short history buffer rather than following live, which is what gives
+it the drag. It absorbs 50 damage as a real hitscan blocker: shots are tested against its
+oriented box *before* bodies, so anyone behind it is covered for free. Your own shots pass
+straight through, because a shield you can't fire past is a punishment rather than a skill.
+`Q` only patches it once it's under 10 — a healthy one refuses, a broken one is replaced, a
+damaged one goes back to 50 — on a 55 second cooldown.
+
+The **mechanist's** turrets carry 100 rounds at 5 damage on an M4 cadence and vanish after
+a minute or when empty. Their shots are attributed to whoever placed them, so a turret
+can't hit its owner and its kills are theirs — which also means the bots blame you for it.
 
 ## Running
 
@@ -88,6 +112,25 @@ preferred range, so one is genuinely sharp and one is a liability. They also loo
 crates for guns, hunt you by sound, and fight each other — it's a free-for-all, not five
 bots ganging up on the player.
 
+## Graphics
+
+There's a **Fancy shaders** toggle in the pause menu. Off, you get the flat pencil look.
+On, four things switch in:
+
+- **Realtime shadows** from a 1024² shadow map, cast down the average direction of a
+  ceiling full of light panels. Its near plane starts just below the ceiling — otherwise
+  the ceiling is the first thing the light hits and the whole building sits in its shadow,
+  which is true and useless, since the panels are *in* it. A cast shadow isn't dimmed, it's
+  drawn: it picks up cross-hatching of its own.
+- **Light panel falloff**, from the eight nearest panels to the camera, so standing under
+  one is brighter than standing between them. Capped at paper white — paper can't get
+  brighter than paper, so the contrast comes from darkening what the panels don't reach.
+- **Bloom and depth of field**, sharing one half-resolution blur (two chains would look
+  marginally better and cost twice as much for a game drawn in pencil). Depth comes from a
+  sampleable depth texture blitted out of the multisampled buffer, so MSAA survives.
+- **Saturation balance**, pulling back the colour the bloom washes out and keeping the
+  paper off the clipping point.
+
 ## The look
 
 **Everything is drawn at 12fps. Everything is *played* at 60.**
@@ -107,13 +150,20 @@ pose can be asked for a few milliseconds "ago" and drawn as a fainter outline be
 real one. Fast actions trail; slow ones don't. It's what hand-drawn animation does on a
 fast action, and at twelve frames a second it's the only honest way to sell speed.
 
+**The whole viewmodel is sampled at the last animation step**, not at the current
+instant — otherwise the weapon in your hands is the one thing on screen not moving on
+twelves.
+
 **Weapon swaps** twirl. The weapon is pulled in front of you and tumbles twice, and halfway
 through — while it's spinning fastest — the old one becomes the new one, so you read it as
 the knife *turning into* the gun.
 
 **The knife** has a wind-up, a fast cut that smears, and a recovery, alternating sides each
-swing. Stand still holding it for three seconds and you start spinning it on a finger until
-something interrupts you.
+swing. Stand still holding it for three seconds and it does one trick — winds up, whips
+over twice, and is caught — then rests for another three before repeating. The turn count
+is whole so it lands exactly where it started, and the hand is posed from a matrix without
+the spin in it, so the knife turns inside a steady hand rather than the whole fist
+cartwheeling with it.
 
 **Sniper impact frame.** A sniper round that connects blacks out the page except for a
 ragged white hole blown open at the point of impact. Real-time driven, so it lasts 0.65s at
@@ -137,12 +187,43 @@ The rest of the pipeline:
 - **Fill pass.** Flat comic shading keyed to which way a face points, with pencil
   cross-hatching in the shadows sampled in screen space and re-jittered every animation
   step — so shading looks re-drawn each frame instead of pasted on.
+- **Characters fade** between coloured and line-art. The shader's mask is ported to JS so
+  a fighter samples it once at their feet and eases toward it over about a second; fading
+  per-pixel as a body crossed the border looked like it was being wiped. Your own hands and
+  weapon do the same in first person — cross into the bare half and your gun becomes an
+  outline drawing of a gun.
+- **Bots hold weapons** by two-bone IK. The grip position is decided first and both arms
+  are solved to reach it, which is the same order the player's hands are placed in — pose
+  the arms first and the rifle ends up tucked under an armpit.
 - **The half-coloured map.** A straight sweep runs across the level, chewed up by
   medium-scale noise so it never reads as a ruled line. On one side: crayon over the line
   art. On the other: bare pencil on white paper. The colouring is thresholded against a
   crayon-coverage texture, so it's solid well inside the region and frays into patches
   exactly where it stops. Your own gun stays coloured wherever you are, because a white gun
   against a white floor is unreadable.
+
+## Doodlers
+
+You pick a class before the match. Skill is on `Q`; weapons stay on scroll and `1`/`2`.
+
+| | statline | skill |
+|---|---|---|
+| **Normie** | 100 HP, normal speed, +55% boost cap | — |
+| **Guardian** | 100 HP, −10% speed, +40% boost cap | a paper shield that floats in front of you |
+| **Mechanist** | 85 HP, normal speed, +55% boost cap | scribbled turrets, two per cooldown |
+| **Runner** | 90 HP, +10% speed, +70% boost cap | a forward slide every 4s |
+
+The **guardian's** shield hangs half a second behind everything you do — it reads its
+owner's pose out of a short history buffer rather than following live, which is what gives
+it the drag. It absorbs 50 damage as a real hitscan blocker: shots are tested against its
+oriented box *before* bodies, so anyone behind it is covered for free. Your own shots pass
+straight through, because a shield you can't fire past is a punishment rather than a skill.
+`Q` only patches it once it's under 10 — a healthy one refuses, a broken one is replaced, a
+damaged one goes back to 50 — on a 55 second cooldown.
+
+The **mechanist's** turrets carry 100 rounds at 5 damage on an M4 cadence and vanish after
+a minute or when empty. Their shots are attributed to whoever placed them, so a turret
+can't hit its owner and its kills are theirs — which also means the bots blame you for it.
 
 ## Running it locally
 

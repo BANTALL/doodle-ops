@@ -198,13 +198,48 @@ export function textureFromCanvas(gl, canvas, { wrap = 'repeat', mipmap = true, 
 }
 
 /**
+ * Depth-only target for the shadow map. Configured for hardware comparison sampling, so
+ * the fill shader can use sampler2DShadow and get free PCF on the lookup.
+ */
+export class ShadowTarget {
+  constructor(gl, size) {
+    this.gl = gl;
+    this.size = size;
+    this.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, size, size, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+
+    this.fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.tex, 0);
+    gl.drawBuffers([gl.NONE]);
+    gl.readBuffer(gl.NONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  bind() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.viewport(0, 0, this.size, this.size);
+  }
+}
+
+/**
  * Offscreen colour+depth target. Uses a multisampled renderbuffer pair that blits into a
  * sampleable texture when MSAA is requested - our ink lines alias badly without it.
  */
 export class RenderTarget {
-  constructor(gl, width, height, samples = 0) {
+  constructor(gl, width, height, samples = 0, depthTexture = false) {
     this.gl = gl;
     this.samples = samples;
+    this.wantDepthTex = depthTexture;
+    this.depthTex = depthTexture ? gl.createTexture() : null;
     this.width = 0; this.height = 0;
     this.tex = gl.createTexture();
     this.fboResolve = gl.createFramebuffer();
@@ -232,6 +267,19 @@ export class RenderTarget {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboResolve);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tex, 0);
 
+    if (this.depthTex) {
+      // A sampleable depth buffer, for depth of field. With MSAA on it is filled by
+      // blitting the multisampled depth across in resolve().
+      gl.bindTexture(gl.TEXTURE_2D, this.depthTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboResolve);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.depthTex, 0);
+    }
+
     if (this.samples > 0) {
       const maxS = gl.getParameter(gl.MAX_SAMPLES);
       const s = Math.min(this.samples, maxS);
@@ -242,7 +290,7 @@ export class RenderTarget {
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboMS);
       gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.rbColor);
       gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.rbDepth);
-    } else {
+    } else if (!this.depthTex) {
       gl.bindRenderbuffer(gl.RENDERBUFFER, this.rbDepth);
       gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, width, height);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboResolve);
@@ -264,7 +312,8 @@ export class RenderTarget {
     const gl = this.gl;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.fboMS);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.fboResolve);
-    gl.blitFramebuffer(0, 0, this.width, this.height, 0, 0, this.width, this.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    const bits = gl.COLOR_BUFFER_BIT | (this.depthTex ? gl.DEPTH_BUFFER_BIT : 0);
+    gl.blitFramebuffer(0, 0, this.width, this.height, 0, 0, this.width, this.height, bits, gl.NEAREST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 }
