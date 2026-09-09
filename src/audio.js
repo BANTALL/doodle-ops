@@ -1,6 +1,8 @@
-// WebAudio SFX. Almost everything is synthesised from noise bursts + filtered oscillators,
-// which suits the scratchy paper aesthetic better than clean samples would; the pistol is
-// the exception and plays two recorded clips from assets/audio (see SAMPLES below).
+// WebAudio SFX and music. Almost everything is synthesised from noise bursts + filtered
+// oscillators, which suits the scratchy paper aesthetic better than clean samples would.
+// The exceptions are the recorded clips in assets/audio: the pistol, the crash you hear
+// when you die, and the optional scream when you take a hit (see SAMPLES below), plus the
+// two music tracks, which stream through <audio> elements rather than being decoded whole.
 // Every sample path has a synthesised fallback, so the game still sounds right if the
 // files fail to load.
 
@@ -10,6 +12,7 @@ import { clamp } from './math.js';
 let ctx = null;
 let master = null;
 let noiseBuf = null;
+let lastScream = null;   // so a new scream can duck the one still playing
 
 /**
  * Recorded one-shots. `offset` skips leading silence, `tail` is how much of the clip we
@@ -19,6 +22,10 @@ let noiseBuf = null;
 const SAMPLES = {
   pistolShot:   { url: new URL('../assets/audio/pistol-shot.mp3', import.meta.url).href,   offset: 0.04, tail: 0.85, gain: 1.0, buffer: null },
   pistolReload: { url: new URL('../assets/audio/pistol-reload.mp3', import.meta.url).href, offset: 0,    tail: 1.05, gain: 1.0, buffer: null },
+  // Both of these are mostly silence on either side of the bit you want: the crash starts
+  // 0.10s in, the scream 0.72s in. Playing them from zero would put a hole where the hit is.
+  deathLego:    { url: new URL('../assets/audio/death-lego.mp3', import.meta.url).href,    offset: 0.10, tail: 1.12, gain: 1.0, buffer: null },
+  hurtRah:      { url: new URL('../assets/audio/hurt-rah.mp3', import.meta.url).href,      offset: 0.72, tail: 1.36, gain: 1.0, buffer: null },
 };
 
 // Fetch straight away: the files are tiny, and starting now means they're usually decoded
@@ -42,22 +49,165 @@ function decodeSamples() {
   }
 }
 
-/** Plays a decoded clip. Returns false when it isn't available, so callers can synthesise. */
-function playSample(name, level, delay = 0) {
+/**
+ * Plays a decoded clip. Returns the clip's gain node, or null when the sample isn't
+ * available - callers test the result and fall back to synthesis.
+ *
+ * `rate` repitches the clip, and the tail is divided by it so a slowed-down clip isn't
+ * cut off halfway. `dest` swaps the output for a processing chain (the death crash).
+ */
+function playSample(name, level, { delay = 0, rate = 1, dest = null } = {}) {
   const s = SAMPLES[name];
-  if (!ctx || !s || !s.buffer || level <= 0.0005) return false;
+  if (!ctx || !s || !s.buffer || level <= 0.0005) return null;
   const t0 = ctx.currentTime + delay;
+  const tail = s.tail / rate;
   const src = ctx.createBufferSource();
   src.buffer = s.buffer;
+  src.playbackRate.value = rate;
   const g = ctx.createGain();
   g.gain.setValueAtTime(level * s.gain, t0);
-  g.gain.setValueAtTime(level * s.gain, t0 + s.tail * 0.55);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + s.tail);
+  g.gain.setValueAtTime(level * s.gain, t0 + tail * 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + tail);
   src.connect(g);
-  g.connect(master);
+  g.connect(dest || master);
   src.start(t0, s.offset);
-  src.stop(t0 + s.tail + 0.02);
-  return true;
+  src.stop(t0 + tail + 0.02);
+  return g;
+}
+
+// ---------------------------------------------------------------- death bus
+//
+// The crash that plays when you die is meant to be twice as loud as anything else and to
+// hurt a little. Just multiplying the gain by two would send it past full scale, where the
+// hardware squares off the overs and it stops sounding like breaking plastic and starts
+// sounding like a broken file. So it goes through its own chain instead: a soft clipper
+// that rounds the peaks off while lifting everything underneath them, a high shelf for the
+// bite, and a limiter to catch whatever is left.
+
+let deathBus = null;
+
+function getDeathBus() {
+  if (deathBus || !ctx) return deathBus;
+  const shaper = ctx.createWaveShaper();
+  const n = 2048, curve = new Float32Array(n), k = 2.7, norm = Math.tanh(k);
+  for (let i = 0; i < n; i++) curve[i] = Math.tanh(((i / (n - 1)) * 2 - 1) * k) / norm;
+  shaper.curve = curve;
+  shaper.oversample = '4x';
+
+  const shelf = ctx.createBiquadFilter();
+  shelf.type = 'highshelf';
+  shelf.frequency.value = 2700;
+  shelf.gain.value = 8;             // where the shatter lives - this is the ear-splitting part
+
+  const limit = ctx.createDynamicsCompressor();
+  limit.threshold.value = -3; limit.knee.value = 0; limit.ratio.value = 20;
+  limit.attack.value = 0.001; limit.release.value = 0.12;
+
+  const out = ctx.createGain();
+  out.gain.value = 0.86;
+
+  shaper.connect(shelf); shelf.connect(limit); limit.connect(out); out.connect(master);
+  deathBus = shaper;
+  return deathBus;
+}
+
+// ---------------------------------------------------------------- music
+//
+// Two tracks that alternate, each one starting when the last finishes. They stream through
+// <audio> elements instead of decodeAudioData: a decoded minute of 44.1kHz stereo is about
+// 20MB of float per track, and there is no reason to hold that in memory just to play it
+// front to back once.
+
+const MUSIC_TRACKS = [
+  new URL('../assets/audio/music-archive-echoes.mp3', import.meta.url).href,
+  new URL('../assets/audio/music-archive-echoes-2.mp3', import.meta.url).href,
+];
+const MUSIC_LEVEL = 0.42;      // sits under the SFX; the volume slider scales both
+
+let musicEls = null;
+let musicGain = null;
+let musicIndex = 0;
+let musicWanted = false;
+
+function buildMusic() {
+  if (musicEls) return;
+  musicEls = MUSIC_TRACKS.map((url, i) => {
+    const el = new Audio();
+    el.src = url;
+    el.preload = i === 0 ? 'auto' : 'none';
+    el.volume = MUSIC_LEVEL;          // only used if we can't route it through the graph
+    el.addEventListener('ended', () => { musicIndex = (musicIndex + 1) % musicEls.length; playTrack(); });
+    // A track that won't load shouldn't take the other one down with it.
+    el.addEventListener('error', () => {
+      if (!musicWanted || musicEls[musicIndex] !== el) return;
+      musicIndex = (musicIndex + 1) % musicEls.length;
+      if (musicEls[musicIndex] !== el) playTrack();
+    });
+    return el;
+  });
+}
+
+function wireMusic() {
+  if (!ctx || !musicEls) return;
+  if (!musicGain) {
+    musicGain = ctx.createGain();
+    musicGain.gain.value = MUSIC_LEVEL;
+    musicGain.connect(master);
+  }
+  for (const el of musicEls) {
+    if (el._node) continue;
+    try {
+      el._node = ctx.createMediaElementSource(el);
+      el._node.connect(musicGain);
+      el.volume = 1;                  // the graph handles level from here
+    } catch {
+      el._node = null;                // stays on its own volume, which still works
+    }
+  }
+}
+
+function playTrack() {
+  if (!musicWanted || !musicEls) return;
+  const el = musicEls[musicIndex];
+  const next = musicEls[(musicIndex + 1) % musicEls.length];
+  if (next !== el && next.preload === 'none') next.preload = 'auto';  // fetch it before we need it
+  try { el.currentTime = 0; } catch { /* not seekable yet - it starts at zero anyway */ }
+  const pr = el.play();
+  // Autoplay can still be refused; resumeAudio() tries again on the next real gesture.
+  if (pr && pr.catch) pr.catch(() => {});
+}
+
+/** Starts (or resumes) the music. Safe to call repeatedly. */
+export function startMusic() {
+  musicWanted = true;
+  buildMusic();
+  wireMusic();
+  const el = musicEls[musicIndex];
+  if (el.paused) {
+    if (el.currentTime > 0 && !el.ended) { const pr = el.play(); if (pr && pr.catch) pr.catch(() => {}); }
+    else playTrack();
+  }
+}
+
+/**
+ * Pulls the music down for a moment. The death crash is loud enough that it and the track
+ * together can push the output past full scale, where the hardware clips it; ducking keeps
+ * the sum in range and makes the crash land harder besides.
+ */
+function duckMusic(to, hold, release) {
+  if (!ctx || !musicGain) return;
+  const t = ctx.currentTime;
+  const g = musicGain.gain;
+  g.cancelScheduledValues(t);
+  g.setValueAtTime(g.value, t);
+  g.linearRampToValueAtTime(MUSIC_LEVEL * to, t + 0.03);
+  g.setValueAtTime(MUSIC_LEVEL * to, t + hold);
+  g.linearRampToValueAtTime(MUSIC_LEVEL, t + hold + release);
+}
+
+export function stopMusic() {
+  musicWanted = false;
+  if (musicEls) for (const el of musicEls) el.pause();
 }
 
 export function initAudio() {
@@ -75,12 +225,14 @@ export function initAudio() {
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
 
   decodeSamples();
+  wireMusic();
   return ctx;
 }
 
 export function resumeAudio() {
   if (!ctx) initAudio();
   if (ctx && ctx.state === 'suspended') ctx.resume();
+  startMusic();
 }
 
 export function setVolume(v) { if (master) master.gain.value = clamp(v, 0, 1); }
@@ -175,6 +327,22 @@ export const Sfx = {
     const t = ctx.currentTime;
     bang(t, { level: 0.34, bright: 900, decay: 0.2, thump: 55, thumpLevel: 1.1 });
     tone(t, 260, { level: 0.1, dur: 0.18, type: 'sawtooth', slideTo: 150 });
+    if (settings.hurtSfx) Sfx.scream();
+  },
+  /**
+   * Off by default. Repitched every time so a burst of hits doesn't sound like the same
+   * clip stuttering, and a new one ducks the last one out rather than piling on top: five
+   * M4 rounds land inside half a second and five overlapping screams are just noise.
+   */
+  scream() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (lastScream) {
+      lastScream.gain.cancelScheduledValues(t);
+      lastScream.gain.setValueAtTime(lastScream.gain.value, t);
+      lastScream.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    }
+    lastScream = playSample('hurtRah', 0.9, { rate: 0.74 + Math.random() * 0.86 });
   },
   crateBreak(dist = 0) {
     if (!ctx) return;
@@ -195,7 +363,7 @@ export const Sfx = {
     if (stage === 'out') {
       // Delayed slightly: the clip's magazine-insert lands ~0.52s in, and the pistol's
       // 1.35s reload animation seats the mag around 0.67s.
-      if (kind === 'pistol' && playSample('pistolReload', 0.85 * a, 0.15)) return;
+      if (kind === 'pistol' && playSample('pistolReload', 0.85 * a, { delay: 0.15 })) return;
       bang(t, { level: 0.18 * a, bright: 1600, decay: 0.07, thump: 190, thumpLevel: 0.4 });
     } else {
       bang(t, { level: 0.24 * a, bright: 2000, decay: 0.08, thump: 240, thumpLevel: 0.6 });
@@ -214,6 +382,22 @@ export const Sfx = {
     const g = dist ? spatial(dist, 50) : 1;
     tone(t, 340, { level: 0.16 * g, dur: 0.45, type: 'sawtooth', slideTo: 90 });
     bang(t + 0.05, { level: 0.22 * g, bright: 800, decay: 0.3, thump: 60, thumpLevel: 0.8 });
+  },
+  /**
+   * The player dying. Deliberately the loudest thing in the game - twice the level of a
+   * sniper shot, through the drive chain, with a second copy pitched down underneath so
+   * the crash has some weight under all that top end instead of being pure glass.
+   */
+  playerDeath() {
+    if (!ctx) return;
+    const bus = getDeathBus();
+    const played = playSample('deathLego', 2.0, { dest: bus });
+    if (played) {
+      playSample('deathLego', 1.15, { dest: bus, rate: 0.74, delay: 0.015 });
+      duckMusic(0.22, 0.85, 1.1);
+      return;
+    }
+    Sfx.death();
   },
   kill() { if (!ctx) return; const t = ctx.currentTime; [880, 1180, 1560].forEach((f, i) => tone(t + i * 0.06, f, { level: 0.12, dur: 0.09, type: 'triangle' })); },
   ricochet(dist = 0) {

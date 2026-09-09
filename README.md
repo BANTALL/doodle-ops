@@ -7,8 +7,9 @@ stopped.
 **Play it: https://osnailcyargta-ctrl.github.io/fps/**
 
 No engine, no libraries, no build step. Raw WebGL2 and Canvas2D, about 5k lines. Every
-texture, model and sound is generated at runtime; the only assets in the repo are two
-pistol recordings (see [Credits](#credits)), and the game still runs without them.
+texture and model is generated at runtime, and so is most of the audio; the only assets in
+the repo are six sound files (see [Credits](#credits)), and the game still runs without
+them.
 
 ---
 
@@ -223,6 +224,37 @@ First to the kill limit takes it, but the popup waits two seconds. The bots stan
 you keep control for those two seconds, so the moment you won on is yours to look at rather
 than something a dialog lands on top of.
 
+## Sound
+
+Almost all of it is synthesised at boot — noise bursts through filters, oscillators with
+envelopes — which is why the repo has no sample library in it. Four things are recorded.
+
+**The music** is two tracks that alternate, each one starting when the last ends. They
+stream through `<audio>` elements rather than `decodeAudioData`: a decoded minute of 44.1kHz
+stereo is about 20MB of float per track, and there's no reason to hold that in memory to
+play it front to back once. The next track is preloaded while the current one plays, so the
+handover doesn't gap. Browsers won't start audio before the page has been interacted with,
+so the first click or keypress anywhere unlocks it — captured, so it runs before the button
+handler that wants to click at you.
+
+**Dying** is the loudest thing in the game, deliberately: about twice the perceived level of
+a sniper shot. Getting there isn't a matter of multiplying the gain by two, which would push
+it past full scale where the hardware squares off the peaks and it stops sounding like
+breaking plastic and starts sounding like a broken file. It has its own chain instead — a
+`tanh` soft clipper that rounds the peaks while lifting everything underneath them, a +8dB
+shelf at 2.7kHz for the bite, and a limiter behind that. A second copy of the clip plays
+underneath pitched down to 0.74, so there's weight under all that top end. And the music
+ducks to 22% for it, which keeps the sum inside full scale and makes the crash land harder
+than it would on its own.
+
+**The scream when you take a hit** is off by default; it's in the pause menu. It's repitched
+somewhere between 0.74× and 1.6× every time, so a burst of hits doesn't sound like one clip
+stuttering, and a new one ducks the last one out rather than piling on — five M4 rounds land
+inside half a second, and five overlapping screams are just noise.
+
+Every recorded sound has a synthesised fallback, so a blocked or missing file costs fidelity
+and nothing else.
+
 ## Running it locally
 
 Any static file server will do — ES modules need `http://`, not `file://`:
@@ -278,14 +310,21 @@ Needs a browser with WebGL2 — any current Chrome, Edge, Firefox or Safari.
 
 ## Credits
 
-Two recorded sounds live in `assets/audio/`. Everything else you hear is synthesised from
-noise bursts and filtered oscillators at runtime, and if these files fail to load the game
-falls back to synthesised pistol sounds without complaining.
+Six recorded sounds live in `assets/audio/`. Everything else you hear is synthesised at
+runtime, and if any of these fail to load the game falls back to a synthesised version
+without complaining.
 
 | File | Used for | Source |
 | --- | --- | --- |
 | `pistol-shot.mp3` | the pistol firing | [Freesound](https://freesound.org/) — "gunshots from a distance" (`796391`) |
 | `pistol-reload.mp3` | the pistol reload | generated with [ElevenLabs](https://elevenlabs.io/) sound effects |
+| `death-lego.mp3` | the crash when you die | supplied |
+| `hurt-rah.mp3` | the optional scream on taking damage | supplied |
+| `music-archive-echoes.mp3` | theme, track 1 | supplied — *Archive Echoes* |
+| `music-archive-echoes-2.mp3` | theme, track 2 | supplied — *Archive Echoes* |
 
-The Freesound clip's licence is whatever its uploader chose — check it on the sound's page
-and keep attribution as that licence requires before publishing this anywhere.
+**Licences are not sorted out here.** The Freesound clip carries whatever licence its
+uploader chose — check it on the sound's page and keep attribution as that licence requires.
+The four supplied files came in without provenance, so before publishing this anywhere,
+confirm you have the right to redistribute them; the two music tracks in particular are the
+kind of thing a rights holder notices on a public page.

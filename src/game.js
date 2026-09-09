@@ -519,7 +519,7 @@ export class Game {
       victim.respawnAt = this.time + BOT_RESPAWN_DELAY;
     } else {
       victim.respawnAt = this.time + RESPAWN_DELAY;
-      Sfx.death();
+      Sfx.playerDeath();
     }
     this.entities.addShards(V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z), 8, 2.2);
 

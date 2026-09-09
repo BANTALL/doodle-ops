@@ -62,6 +62,7 @@ function bindSettings(game) {
       if (key === 'volume') setVolume(settings.volume);
       if (key === 'resolutionScale' || key === 'inkAmount') game.resize();
       if (key === 'showFps') game.showFps = settings.showFps;
+      if (key === 'hurtSfx' && settings.hurtSfx) Sfx.scream();   // let them hear what they turned on
       if (key === 'killLimit') game.killLimit = settings.killLimit;
       syncSettingsUI();
     });
@@ -176,6 +177,14 @@ function main() {
     }
     startPlaying();
   });
+
+  // The soundtrack is meant to be playing the whole time, menus included, but no browser
+  // will start audio before the page has been interacted with. So the first click or key
+  // anywhere unlocks it - captured, so it runs before the button handler that wants to
+  // click at you.
+  const unlock = () => { initAudio(); resumeAudio(); setVolume(settings.volume); };
+  window.addEventListener('pointerdown', unlock, { capture: true, once: true });
+  window.addEventListener('keydown', unlock, { capture: true, once: true });
 
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' && !game.paused) game.setPaused(true);

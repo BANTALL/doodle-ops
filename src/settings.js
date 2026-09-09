@@ -11,6 +11,7 @@ export const DEFAULTS = {
   resolutionScale: 1.0,  // 0.6 .. 1.0, drops render resolution on weak GPUs
   inkAmount: 1.0,        // thickness multiplier for the ink outlines
   showFps: false,
+  hurtSfx: false,       // the scream when you take a hit - off unless you ask for it
   botCount: 5,
   killLimit: 20,
   doodler: 'normies',
