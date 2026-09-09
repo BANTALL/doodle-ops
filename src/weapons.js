@@ -1,10 +1,13 @@
 // Weapon definitions and their hand-drawn models. Each gun bakes down to two meshes -
 // a body and one moving part (slide / bolt / blade) - so a whole weapon is two draw calls.
 
-import { FillBuilder, InkBuilder, pushOrientedBox } from './geom.js';
+import { FillBuilder, InkBuilder, pushOrientedBox, pushShape } from './geom.js';
 import { MAT } from './renderer.js';
 
 export const KNIFE = 'knife';
+
+/** Everything that lives in the melee slot. You carry exactly one of these at a time. */
+export const MELEE_IDS = ['knife', 'axe'];
 
 /**
  * damage      per body hit (head multiplies it)
@@ -19,6 +22,17 @@ export const WEAPONS = {
     id: 'knife', name: 'KNIFE', kind: 'melee', slot: 'melee',
     damage: 42, headMult: 1.6, rate: 0.46, range: 3.25, auto: true,
     moveMult: 1.14, drawTime: 0.34, hitDelay: 0.145,
+  },
+  // One swing every three seconds that kills anything it touches, and reaches two metres
+  // further than the knife. The swing itself is twelve drawn frames (see axeframes.js) and
+  // takes a full second of that cooldown, so committing to it is the whole trade.
+  axe: {
+    id: 'axe', name: 'AXE', kind: 'melee', slot: 'melee',
+    damage: 130, headMult: 1.2, rate: 3.0, range: 5.25, auto: false,
+    moveMult: 1.0, drawTime: 0.5, hitDelay: 0.42,
+    swingFrames: 12,              // one drawn cel per animation step
+    throwEvery: 3,                // land this many hits and it leaves your hand
+    throwRange: 26, throwSpeed: 30, recallSpeed: 34,
   },
   pistol: {
     id: 'pistol', name: 'PISTOL', kind: 'gun', slot: 'gun',
@@ -45,6 +59,17 @@ export const WEAPONS = {
 };
 
 export const GUN_IDS = ['pistol', 'm4', 'sniper'];
+
+/**
+ * What a crate coughs up. Mostly guns, but a crate can hand you a melee weapon instead -
+ * which is the only way the axe enters the match.
+ */
+export function randomDropId(rng) {
+  const r = rng.next();
+  if (r < 0.17) return 'axe';
+  if (r < 0.22) return 'knife';
+  return randomGunId(rng);
+}
 
 /** Weighted random gun for crate drops - the sniper stays rare on purpose. */
 export function randomGunId(rng) {
@@ -135,6 +160,30 @@ function buildSniper(gl) {
     }, IW);
 }
 
+/**
+ * The axe. Long haft, a head that is deliberately too big for it - a drawn axe, not a
+ * tool - with the bit flaring out to one side so the swing has a direction you can read.
+ */
+function buildAxe(gl) {
+  const IW = 1.7;
+  const f = new FillBuilder(), i = new InkBuilder();
+  pushOrientedBox(f, i, { pos: [0, -0.01, 0.10], size: [0.042, 0.048, 0.52], mat: MAT.CRATE, inkWidth: IW });       // haft
+  pushOrientedBox(f, i, { pos: [0, -0.01, 0.345], size: [0.056, 0.062, 0.05], mat: MAT.DARK, inkWidth: IW * 0.8 }); // pommel knob
+  pushOrientedBox(f, i, { pos: [0, -0.005, -0.155], size: [0.05, 0.075, 0.11], mat: MAT.DARK, inkWidth: IW });      // collar under the head
+  // Head: a solid core where the haft passes through, with the bit as one flat cut-out
+  // flaring off it. The cut-out alone was right in the hand, where you always see its face,
+  // and wrong everywhere else - a plate seen edge-on across the room is a line, and a
+  // thrown axe turns through that angle twice a second.
+  pushOrientedBox(f, i, { pos: [0.010, 0.005, -0.222], size: [0.115, 0.125, 0.090], mat: MAT.METAL, inkWidth: IW });
+  pushShape(f, i, [
+    [-0.115, -0.055], [-0.048, -0.088], [0.048, -0.120], [0.140, -0.150],
+    [0.186, -0.055], [0.186, 0.062], [0.138, 0.158], [0.046, 0.126],
+    [-0.046, 0.096], [-0.115, 0.068],
+  ], MAT.METAL, IW, 0.072, -0.222);
+  pushOrientedBox(f, i, { pos: [0, -0.005, 0.02], size: [0.052, 0.058, 0.13], mat: MAT.DARK, inkWidth: IW * 0.85 }); // grip wrap
+  return { body: { fill: f.toMesh(gl), ink: i.toMesh(gl) }, moving: null, inkWidth: IW };
+}
+
 function buildKnife(gl) {
   const IW = 1.6;
   const f = new FillBuilder(), i = new InkBuilder();
@@ -171,6 +220,7 @@ export function buildWeaponModels(gl) {
       m4: buildM4(gl),
       sniper: buildSniper(gl),
       knife: buildKnife(gl),
+      axe: buildAxe(gl),
     },
     hand: buildHand(gl),
     arm: buildArm(gl),
@@ -183,6 +233,7 @@ export const MUZZLE = {
   m4: [0, 0.012, -0.80],
   sniper: [0, 0.005, -0.94],
   knife: [0, 0.0, -0.40],
+  axe: [0.14, 0.0, -0.24],
 };
 
 /** Resting pose of the weapon in eye space: [x, y, z] then [pitch, yaw, roll]. */
@@ -191,6 +242,9 @@ export const HOLD = {
   m4:     { pos: [0.205, -0.180, -0.345], rot: [0.010, 0.125, -0.075], grip: [0, -0.085, 0.005], support: [0, -0.055, -0.44] },
   sniper: { pos: [0.200, -0.180, -0.300], rot: [0.008, 0.110, -0.065], grip: [0, -0.085, 0.02], support: [0, -0.075, -0.30] },
   knife:  { pos: [0.255, -0.245, -0.360], rot: [-0.34, 0.30, 0.42], grip: [0, -0.01, 0.085], support: null },
+  // Held further out and lower than the knife, and cocked back over the shoulder, because
+  // the head is big enough to fill a third of the screen if you hold it where a knife goes.
+  axe:    { pos: [0.195, -0.265, -0.520], rot: [0.42, 0.34, 0.35], grip: [0, -0.01, 0.170], support: [0, -0.01, 0.300] },
 };
 
 /** Recoil profile of the moving part: how far it travels and how fast it returns. */

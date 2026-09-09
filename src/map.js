@@ -470,6 +470,8 @@ export class GameMap {
         chunks.push({
           index: cz * this.chunksX + cx,
           cx, cz, i0, j0, i1, j1,
+          // World-space centre, for distance work that shouldn't have to convert.
+          wcx: (i0 + i1) * 0.5 * CELL, wcz: (j0 + j1) * 0.5 * CELL,
           fillB: new FillBuilder(), inkB: new InkBuilder(),
           min: [i0 * CELL, 0, j0 * CELL],
           max: [i1 * CELL, H, j1 * CELL],

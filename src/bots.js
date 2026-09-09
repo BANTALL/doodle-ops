@@ -15,7 +15,8 @@
 //     individual bullets. They are not dodging you, and it shows.
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT } from './combat.js';
-import { WEAPONS, MUZZLE, randomGunId } from './weapons.js';
+import { WEAPONS, MUZZLE, randomGunId, KNIFE } from './weapons.js';
+import { LOD_INK, LOD_DETAIL } from './entities.js';
 import { CharacterRig, SHIRT_MATS } from './actors.js';
 import { M4, V, Rng, clamp, lerp, damp, dirFrom, yawOf, angleTo, wrapAngle, approachAngle, DEG, TAU } from './math.js';
 import { Sfx } from './audio.js';
@@ -40,6 +41,11 @@ const STATE = {
 function gunScore(id) {
   if (!id) return 0;
   return { m4: 3.0, sniper: 2.4, pistol: 1.8 }[id] ?? 1;
+}
+
+/** How badly a bot wants a melee weapon it hasn't got. An axe is worth crossing a room for. */
+function meleeScore(id) {
+  return { axe: 3.0, knife: 1.0 }[id] ?? 0;
 }
 
 export class Bot {
@@ -157,7 +163,8 @@ export class Bot {
     this.state = STATE.PATROL;
     this.target = null;
     this.timeSinceSeen = 99;
-    this.loadout = new Loadout(randomGunId(this.rng));
+    // Same rule the player gets: the gun resets, the melee weapon you found is yours.
+    this.loadout = new Loadout(randomGunId(this.rng), this.loadout ? this.loadout.melee : KNIFE);
     this.goalCell = -1;
     this.flow = null;
     this.rigDirty = true;
@@ -237,7 +244,7 @@ export class Bot {
       if (lo.reloadT > 0 && dist < 9 && this.targetVisible) this.state = STATE.RETREAT;
       else if (!lo.hasGun && dist > 7 && !this.targetVisible) this.state = STATE.LOOT;
       else this.state = this.targetVisible ? STATE.COMBAT : STATE.HUNT;
-    } else if (wantGun || wantAmmo) {
+    } else if (wantGun || wantAmmo || this._wantsBetterMelee()) {
       this.state = STATE.LOOT;
     } else if (this.state === STATE.INVESTIGATE && this.timeSinceSeen < MEMORY_TIME) {
       // stay investigating
@@ -318,15 +325,35 @@ export class Bot {
   }
 
   /** Nearest worthwhile pickup, or a crate to smash open if nothing is lying around. */
+  /**
+   * Is there a melee weapon worth crossing the room for? Checked rather than assumed, so a
+   * bot with a knife doesn't spend the whole match in LOOT looking for an axe that nobody
+   * has dropped.
+   */
+  _wantsBetterMelee() {
+    const mine = meleeScore(this.loadout.melee);
+    for (const p of this.game.entities.pickups) {
+      if (p.slotKind !== 'melee' || meleeScore(p.gunId) <= mine + 0.01) continue;
+      if (V.distXZ(this.pos, p.pos) < 30) return true;
+    }
+    return false;
+  }
+
   _findLoot() {
     const game = this.game, map = game.map;
     const mine = gunScore(this.loadout.gun);
     let best = null, bestD = 34;
+    const myMelee = meleeScore(this.loadout.melee);
     for (const p of game.entities.pickups) {
       if (p.kind === 'heart') continue;
-      const score = gunScore(p.gunId);
-      const worth = score > mine + 0.01 || (!this.loadout.hasGun) ||
-        (p.gunId === this.loadout.gun && this.loadout.reserve < WEAPONS[p.gunId].reserve * 0.3);
+      let worth;
+      if (p.slotKind === 'melee') {
+        worth = meleeScore(p.gunId) > myMelee + 0.01;
+      } else {
+        const score = gunScore(p.gunId);
+        worth = score > mine + 0.01 || (!this.loadout.hasGun) ||
+          (p.gunId === this.loadout.gun && this.loadout.reserve < WEAPONS[p.gunId].reserve * 0.3);
+      }
       if (!worth) continue;
       const d = V.distXZ(this.pos, p.pos);
       if (d < bestD) { bestD = d; best = { pickup: p, cell: cellIdx(map, p.pos) }; }
@@ -513,7 +540,8 @@ export class Bot {
 
   _meleeHit() {
     const game = this.game;
-    const def = WEAPONS.knife;
+    const def = this.loadout.def;
+    if (def.kind !== 'melee') return;
     const eye = this.eye;
     const dir = dirFrom(this.yaw, this.pitch, V.make());
     const res = resolveMelee(game.world, this, eye, dir, def);
@@ -609,7 +637,12 @@ export class Bot {
     if (game.entities.pickups.indexOf(p) < 0) { this.lootTarget = null; return; }
     if (V.distXZ(this.pos, p.pos) > 1.5 || Math.abs(p.pos.y - this.pos.y) > 2) return;
     const lo = this.loadout;
-    if (lo.gun === p.gunId) {
+    if (p.slotKind === 'melee') {
+      // Bots swing an axe as happily as you do; they just never throw it, which is the
+      // one part of the weapon that belongs to the player.
+      const dropped = lo.takeMelee(p.gunId);
+      if (dropped) game.entities.spawnPickup(dropped, V.make(this.pos.x, this.pos.y + 0.9, this.pos.z));
+    } else if (lo.gun === p.gunId) {
       lo.reserve = Math.min(WEAPONS[p.gunId].reserve, lo.reserve + p.ammo + p.reserve);
     } else {
       const dropped = lo.takeGun(p.gunId, p.ammo, p.reserve);
@@ -744,21 +777,29 @@ export class Bot {
     const m = this._m;
     const seed = this.index * 17.3;
     const tint = { objSeed: seed, colorAmt: this.colorAmt };
+    // Far bots are drawn the way you'd draw a figure in the background of a sketch: the
+    // shape, filled in, and none of the linework. Their outline is by far the heaviest ink
+    // mesh in the scene, so this is where the frame time goes when five of them are in view.
+    const d2 = V.dist2(this.animPos, cam.pos);
+    const inked = d2 < LOD_INK * LOD_INK;
+    const detailed = d2 < LOD_DETAIL * LOD_DETAIL;
     M4.compose(m, this.animPos, this.animYaw, 0, 0, 1, 1, 1);
     r.fill(this.rig.fill, m, tint);
-    r.ink(this.rig.ink, m, { objSeed: seed });
+    if (inked) r.ink(this.rig.ink, m, { objSeed: seed }); else r.stats.inkLod++;
 
-    // Pencil smudge underneath: without it a character reads as pasted onto the page.
-    const shadow = M4.create();
-    const sy = this.animPos.y + 0.014;
-    shadowMatrix(shadow, this.animPos.x, sy, this.animPos.z, 1.35);
-    r.quad(r.texSmudge, shadow, [0.32, 0.30, 0.28, this.alive ? 0.30 : 0.20]);
+    if (detailed) {
+      // Pencil smudge underneath: without it a character reads as pasted onto the page.
+      const shadow = this._shadowM || (this._shadowM = M4.create());
+      const sy = this.animPos.y + 0.014;
+      shadowMatrix(shadow, this.animPos.x, sy, this.animPos.z, 1.35);
+      r.quad(r.texSmudge, shadow, [0.32, 0.30, 0.28, this.alive ? 0.30 : 0.20]);
+    }
 
     if (!this.alive) return;
 
     // Weapon in hand, aimed along the same line the bullets take.
     const lo = this.loadout;
-    const model = this.game.weapons.models[lo.id];
+    const model = lo.isMelee && lo.meleeOut ? null : this.game.weapons.models[lo.id];
     const g = this.rig.grip;
     if (model && g) {
       // Weapon rides the same grip point the arms were solved to reach.
@@ -771,8 +812,11 @@ export class Bot {
       const held = raw;
       const wOpts = { objSeed: seed + 3, colorAmt: this.colorAmt };
       r.fill(model.body.fill, held, wOpts);
-      r.ink(model.body.ink, held, { objSeed: seed + 3 });
-      if (model.moving) { r.fill(model.moving.fill, held, wOpts); r.ink(model.moving.ink, held, { objSeed: seed + 3 }); }
+      if (inked) r.ink(model.body.ink, held, { objSeed: seed + 3 });
+      if (model.moving && detailed) {
+        r.fill(model.moving.fill, held, wOpts);
+        if (inked) r.ink(model.moving.ink, held, { objSeed: seed + 3 });
+      }
 
       if (this.flashFrames > 0 && lo.def.kind === 'gun') {
         const mz = MUZZLE[lo.id];

@@ -2,13 +2,16 @@
 // a full-rate simulation clock and a 12fps animation clock everything is *drawn* on.
 
 import { Renderer } from './renderer.js';
-import { GameMap, WALL_H, CELL } from './map.js';
+import { GameMap, WALL_H, CELL, CHUNK } from './map.js';
+import { Frustum } from './frustum.js';
 import { Entities } from './entities.js';
 import { Player } from './player.js';
 import { Bot } from './bots.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
-import { buildWeaponModels, WEAPONS, randomGunId } from './weapons.js';
+import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
+import { buildAxeFrames } from './axeframes.js';
+import { ThrownAxe } from './thrownaxe.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
 import { Shield, Turret, buildSkillMeshes } from './skills.js';
@@ -24,6 +27,11 @@ const BOT_RESPAWN_DELAY = 3.2;
 export const VICTORY_DELAY = 2;   // seconds of free look before the result popup
 export const HEART_HEAL = 5;      // a heart is a top-up, not a medkit
 
+// Chunks further than this (measured to the chunk's centre, so a big chunk starts losing
+// its outlines a little before its far edge crosses the line) are drawn without ink.
+export const CHUNK_INK_DIST = 30;
+const CHUNK_INK_LOD2 = CHUNK_INK_DIST * CHUNK_INK_DIST;
+
 export class Game {
   constructor({ glCanvas, hudCanvas, ui }) {
     this.renderer = new Renderer(glCanvas);
@@ -33,6 +41,7 @@ export class Game {
     this.ui = ui;
 
     this.weapons = buildWeaponModels(this.gl);
+    this.axeFrames = buildAxeFrames(this.gl);
     this.skillMeshes = buildSkillMeshes(this.gl);
     this.botNames = [...BOT_NAMES];
 
@@ -59,6 +68,7 @@ export class Game {
     this.actors = [this.player];
     this.shields = [];
     this.turrets = [];
+    this.axes = [];              // axes in flight, stuck in something, or on their way back
 
     this.map = null;
     this.entities = null;
@@ -125,6 +135,7 @@ export class Game {
     this.actors = [this.player, ...this.bots];
     this.shields.length = 0;
     this.turrets.length = 0;
+    this.axes.length = 0;
     this.world = { map: this.map, entities: this.entities, actors: this.actors, shields: this.shields };
 
     this.player.kills = 0; this.player.deaths = 0;
@@ -287,16 +298,53 @@ export class Game {
     this.animFrame++;
     this.animTime += ANIM_DT;
     this.player.animStep(ANIM_DT);
+
+    // Re-baking a bot's body is the most expensive thing an animation step does, so a bot
+    // off screen doesn't get one. The test is the same frustum the renderer will use a
+    // moment from now, against a sphere fat enough to cover the rig's reach, plus the
+    // occlusion mask - a bot on the far side of a wall is culled even when it's dead
+    // ahead. Anyone very close is always posed: they can enter the view between steps.
+    const fr = this._cullFrustum();
+    const mask = this.chunkMask;
+    const nx = this.worldMesh.chunksX;
     const cam = this.camera;
     for (const b of this.bots) {
-      const dx = b.pos.x - cam.pos.x, dz = b.pos.z - cam.pos.z;
-      const d = Math.hypot(dx, dz);
-      // Generous cone: better to re-bake a bot nobody sees than to catch one popping in.
-      const facing = d < 1e-3 ? 1 : (dx * -cam.fwd.x + dz * -cam.fwd.z) / d;
-      b.animStep(ANIM_DT, d < 9 || (facing > 0.15 && d < 75));
+      const near = V.dist2(b.pos, cam.pos) < 100;      // ten metres
+      let visible = near;
+      if (!visible && fr.sphere(b.pos.x, b.pos.y + 0.9, b.pos.z, 2.2)) {
+        const [ci, cj] = this.map.cellOf(b.pos.x, b.pos.z);
+        const chunk = Math.min(this.worldMesh.chunksZ - 1, Math.max(0, Math.floor(cj / CHUNK))) * nx +
+                      Math.min(nx - 1, Math.max(0, Math.floor(ci / CHUNK)));
+        visible = !mask || mask[chunk] === 1;
+      }
+      b.poseVisible = visible;
+      b.animStep(ANIM_DT, visible);
     }
     this.entities.animStep();
     for (const t of this.turrets) t.animStep();
+    for (let i = this.axes.length - 1; i >= 0; i--) {
+      const a = this.axes[i];
+      a.animStep(this);
+      if (a.done) this._removeAxe(a);
+    }
+  }
+
+  /**
+   * The frustum to cull against *this* step. The renderer only builds its own once the
+   * frame starts drawing, which is after the animation step that decides who gets posed -
+   * using last frame's would let a fast turn drop a bot for a whole twelfth of a second.
+   */
+  _cullFrustum() {
+    const r = this.renderer;
+    const cam = this.camera;
+    const aspect = r.rtWidth / r.rtHeight;
+    const proj = this._cullProj || (this._cullProj = M4.create());
+    const view = this._cullView || (this._cullView = M4.create());
+    const vp = this._cullVP || (this._cullVP = M4.create());
+    M4.perspective(proj, cam.fov * Math.PI / 180, aspect, 0.05, 400);
+    M4.fpsView(view, cam.pos, cam.yaw, cam.pitch, cam.roll || 0);
+    M4.mul(vp, proj, view);
+    return (this._frustum || (this._frustum = new Frustum())).fromMatrix(vp);
   }
 
   // ------------------------------------------------------------ world helpers
@@ -465,14 +513,92 @@ export class Game {
 
   registerMelee(shooter, origin, dir, res, def) {
     const ent = this.entities;
+    const heavy = def.id === 'axe';
+    // The arc the swing cut through the air, laid in the camera plane and rolled to match
+    // the direction the weapon travelled.
+    if (res.kind !== 'none') {
+      const at = V.make(origin.x + dir.x * res.dist * 0.9, origin.y + dir.y * res.dist * 0.9, origin.z + dir.z * res.dist * 0.9);
+      ent.addSlash(at, heavy ? 1.5 : 0.95, shooter.loadout.slashDir > 0 ? 0.55 : -0.55, heavy ? 3 : 2);
+      ent.addBurst(at, heavy ? 0.85 : 0.5, heavy ? 3 : 2);
+    }
     if (res.kind === 'actor') {
       Sfx.stab(V.dist(shooter.pos, this.player.pos));
       this.applyDamage(res.target, res.damage, shooter, false, def);
+      if (heavy) ent.addShards(V.make(res.target.pos.x, res.target.pos.y + 1.1, res.target.pos.z), 6, 2.6);
     } else if (res.kind === 'crate') {
       Sfx.stab(V.dist(shooter.pos, this.player.pos));
       ent.damageCrate(res.target, res.damage, (c) => this.onCrateBroken(c));
       if (shooter.isPlayer) this.hud.addHitMarker(false);
     }
+  }
+
+  // ------------------------------------------------------------ the axe
+
+  /** Third connecting swing: the axe leaves the hand. */
+  throwAxe(owner, origin, dir) {
+    const lo = owner.loadout;
+    if (lo.melee !== 'axe' || lo.meleeOut) return null;
+    lo.meleeOut = true;
+    lo.meleeHits = 0;
+    const from = V.make(origin.x + dir.x * 0.55, origin.y - 0.1 + dir.y * 0.55, origin.z + dir.z * 0.55);
+    const axe = new ThrownAxe(owner, from, dir);
+    this.axes.push(axe);
+    Sfx.axeThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));
+    if (owner.isPlayer) this.toast('AXE AWAY - ATTACK TO CALL IT BACK');
+    return axe;
+  }
+
+  /** Attacking with an empty hand: whistle it home. */
+  recallAxe(owner) {
+    const axe = this.axes.find((a) => a.owner === owner && !a.done);
+    if (!axe || !axe.recallable) return false;
+    axe.recall();
+    return true;
+  }
+
+  /** The axe reached the hand it was flying toward. */
+  onAxeReturned(axe) {
+    this._removeAxe(axe);
+    const lo = axe.owner.loadout;
+    if (axe.owner.alive && lo.melee === 'axe') {
+      lo.meleeOut = false;
+      lo.cooldown = Math.max(lo.cooldown, 0.28);   // a beat to catch it before swinging again
+      lo.drawT = 0;
+      Sfx.pickup();
+    }
+  }
+
+  onAxeStuck(axe) {
+    this.entities.addBurst(axe.pos, 0.6, 3);
+    this.entities.addShards(axe.pos, 4, 2.0);
+    Sfx.axeStick(V.dist(axe.pos, this.player.pos));
+  }
+
+  onAxeHitActor(axe, target, head) {
+    axe.hitActors.add(target);
+    const def = axe.def;
+    this.entities.addSlash(V.clone(axe.pos), 1.4, 0.9, 3);
+    this.applyDamage(target, Math.round(def.damage * (head ? def.headMult : 1)), axe.owner, head, def);
+  }
+
+  onAxeHitCrate(axe, crate) {
+    this.entities.damageCrate(crate, axe.def.damage, (c) => this.onCrateBroken(c));
+  }
+
+  /**
+   * Take an owner's axe out of the world entirely - they swapped it away, or died holding
+   * nothing. The melee slot is theirs to keep, so this only ever removes the flying copy.
+   */
+  dropThrownAxe(owner) {
+    for (let i = this.axes.length - 1; i >= 0; i--) {
+      if (this.axes[i].owner === owner) { this.axes[i].done = true; this.axes.splice(i, 1); }
+    }
+    owner.loadout.meleeOut = false;
+  }
+
+  _removeAxe(axe) {
+    const i = this.axes.indexOf(axe);
+    if (i >= 0) this.axes.splice(i, 1);
   }
 
   applyDamage(target, amount, attacker, head, def) {
@@ -493,12 +619,15 @@ export class Game {
 
   onCrateBroken(crate) {
     Sfx.crateBreak(V.dist(crate.pos, this.player.pos));
-    const gun = randomGunId(this.rng);
+    // A crate normally coughs up a gun, but roughly one in five hands over a melee weapon
+    // instead - which is the only way an axe gets into a match.
+    const drop = randomDropId(this.rng);
     const p = V.make(crate.pos.x, crate.pos.y + 0.2, crate.pos.z);
-    this.entities.spawnPickup(gun, p, undefined, undefined, true, true);
-    // Most crates also cough up a heart alongside the gun.
+    this.entities.spawnPickup(drop, p, undefined, undefined, true, true);
+    // Most crates also cough up a heart alongside it.
     if (this.rng.chance(0.75)) this.entities.spawnHeart(p);
-    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED A ${WEAPONS[gun].name}`);
+    this.entities.addBurst(p, 0.75, 3);
+    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED ${drop === 'axe' ? 'AN' : 'A'} ${WEAPONS[drop].name}`);
   }
 
   killActor(victim, killer) {
@@ -506,6 +635,7 @@ export class Game {
     victim.alive = false;
     victim.deaths++;
     victim.dropGun?.();
+    this.dropThrownAxe(victim);
     this.removeShield(victim);
     for (const t of this.turrets) if (t.owner === victim) t.expire(this);
     if (!victim.isPlayer) {
@@ -652,21 +782,30 @@ export class Game {
     // The wobble seed only changes on an animation step, so lines hold still between them.
     r.beginFrame(this.camera, this.animFrame * 0.7351);
 
-    // Only submit the chunks the camera can reach and see.
+    // Only submit the chunks the camera can reach and see, and past a certain distance
+    // submit them without their ink. A far room keeps its colour and its shape but stops
+    // being outlined, the way the far half of a sketch is blocked in but not yet drawn -
+    // which happens to be where most of the frame time was going, since ink is a quad per
+    // line segment and a chunk is thousands of them.
     this.map.computeVisibleChunks(this.camera.pos, r.frustum, this.chunkMask);
     const chunks = this.worldMesh.chunks;
+    const cp = this.camera.pos;
     r.stats.chunks = chunks.length;
     for (let i = 0; i < chunks.length; i++) {
-      if (!this.chunkMask[chunks[i].index]) continue;
+      const c = chunks[i];
+      if (!this.chunkMask[c.index]) continue;
       r.stats.chunksDrawn++;
-      r.fill(chunks[i].fill, null, { objSeed: 0 });
-      r.ink(chunks[i].ink, null, { objSeed: 0 });
+      r.fill(c.fill, null, { objSeed: 0 });
+      const dx = c.wcx - cp.x, dz = c.wcz - cp.z;
+      if (dx * dx + dz * dz < CHUNK_INK_LOD2) r.ink(c.ink, null, { objSeed: 0 });
+      else r.stats.inkLod++;
     }
 
     this._updateLights();
     this._queueShadowCasters(r);
 
     this.entities.render(r, this.camera);
+    for (const a of this.axes) a.render(r, this.weapons.models.axe, this._accumAnim);
     for (const sh of this.shields) sh.render(r, this.skillMeshes);
     for (const t of this.turrets) t.render(r, this.skillMeshes, this);
     for (const b of this.bots) {

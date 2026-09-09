@@ -121,7 +121,7 @@ export class Renderer {
     this.colorSlope = 0.05;
 
     this.frustum = new Frustum();
-    this.stats = { chunks: 0, chunksDrawn: 0, actors: 0, actorsDrawn: 0, props: 0, propsDrawn: 0 };
+    this.stats = { chunks: 0, chunksDrawn: 0, actors: 0, actorsDrawn: 0, props: 0, propsDrawn: 0, inkLod: 0 };
 
     this.eye = V.make();
     this.seed = 0;
@@ -169,6 +169,7 @@ export class Renderer {
     this.stats.chunks = this.stats.chunksDrawn = 0;
     this.stats.actors = this.stats.actorsDrawn = 0;
     this.stats.props = this.stats.propsDrawn = 0;
+    this.stats.inkLod = 0;
 
     this.fills.reset(); this.inks.reset(); this.quads.reset();
     this.vmFills.reset(); this.vmInks.reset(); this.shadowCasters.reset();

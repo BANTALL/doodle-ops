@@ -150,10 +150,22 @@ export function unitQuadMesh(gl) {
 export function shapeMeshes(gl, polygon, mat = 0, inkWidth = 2.2, thickness = 0.02) {
   const f = new FillBuilder();
   const i = new InkBuilder();
+  pushShape(f, i, polygon, mat, inkWidth, thickness);
+  return { fill: f.toMesh(gl), ink: i.toMesh(gl) };
+}
+
+/**
+ * The same flat cut-out, pushed into builders you already have, so one drawing made of
+ * several polygons - an animation cel, say - still bakes down to a single mesh pair.
+ *
+ * The polygon must be convex or at least star-shaped about its first point, since it is
+ * filled as a fan from there.
+ */
+export function pushShape(f, i, polygon, mat = 0, inkWidth = 2.2, thickness = 0.02, z0 = 0) {
   const n = polygon.length;
   const half = thickness * 0.5;
-  for (const z of [half, -half]) {
-    const nz = z > 0 ? 1 : -1;
+  for (const z of [z0 + half, z0 - half]) {
+    const nz = z > z0 ? 1 : -1;
     const base = f.n;
     for (const p of polygon) f.vertex(p[0], p[1], z, 0, 0, nz, p[0], p[1], mat);
     for (let k = 1; k < n - 1; k++) {
@@ -166,12 +178,11 @@ export function shapeMeshes(gl, polygon, mat = 0, inkWidth = 2.2, thickness = 0.
     const a = polygon[k], b = polygon[(k + 1) % n];
     const ex = b[0] - a[0], ey = b[1] - a[1];
     const L = Math.hypot(ex, ey) || 1;
-    f.quad([a[0], a[1], -half], [b[0], b[1], -half], [b[0], b[1], half], [a[0], a[1], half],
+    f.quad([a[0], a[1], z0 - half], [b[0], b[1], z0 - half], [b[0], b[1], z0 + half], [a[0], a[1], z0 + half],
       [ey / L, -ex / L, 0], mat, [[0, 0], [L, 0], [L, thickness], [0, thickness]]);
-    i.edge([a[0], a[1], half], [b[0], b[1], half], inkWidth);
-    i.edge([a[0], a[1], -half], [b[0], b[1], -half], inkWidth * 0.75);
+    i.edge([a[0], a[1], z0 + half], [b[0], b[1], z0 + half], inkWidth);
+    i.edge([a[0], a[1], z0 - half], [b[0], b[1], z0 - half], inkWidth * 0.75);
   }
-  return { fill: f.toMesh(gl), ink: i.toMesh(gl) };
 }
 
 /**

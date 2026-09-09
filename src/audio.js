@@ -321,6 +321,37 @@ export const Sfx = {
     n.start(t); n.stop(t + 0.25);
   },
   stab(dist = 0) { if (ctx) bang(ctx.currentTime, { level: 0.3 * (dist ? spatial(dist, 25) : 1), bright: 900, decay: 0.1, thump: 60, thumpLevel: 0.9 }); },
+  /** The axe: everything the knife does, an octave down and twice as long. */
+  axeSwing(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 30) : 1;
+    const n = noiseSource(0.4, 0.7);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = 1.8;
+    bp.frequency.setValueAtTime(260, t);
+    bp.frequency.exponentialRampToValueAtTime(1500, t + 0.26);
+    n.connect(bp);
+    const gn = env(bp, t, 0.30 * g, 0.02, 0.30);
+    gn.connect(master);
+    n.start(t); n.stop(t + 0.45);
+    tone(t, 150, { level: 0.10 * g, dur: 0.28, type: 'sawtooth', slideTo: 62 });
+  },
+  axeThrow(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 40) : 1;
+    // A rising whistle, so a thrown axe is audible as a thing crossing the room.
+    tone(t, 420, { level: 0.13 * g, dur: 0.34, type: 'triangle', slideTo: 1150 });
+    bang(t, { level: 0.20 * g, bright: 1400, decay: 0.18, thump: 90, thumpLevel: 0.7 });
+  },
+  axeStick(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 40) : 1;
+    bang(t, { level: 0.42 * g, bright: 700, decay: 0.22, thump: 52, thumpLevel: 1.2, q: 1.2 });
+    tone(t + 0.02, 190, { level: 0.11 * g, dur: 0.36, type: 'triangle', slideTo: 88 });
+  },
   hitMarker() { if (ctx) tone(ctx.currentTime, 1500, { level: 0.13, dur: 0.05, type: 'square', slideTo: 2100 }); },
   hurt() {
     if (!ctx) return;

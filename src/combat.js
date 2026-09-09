@@ -11,10 +11,13 @@ export const BODY_HEIGHT = 1.78;
 export const HEAD_Y = 1.60;
 export const HEAD_R = 0.24;
 
-/** One fighter's weapons: the knife they always have, plus at most one gun. */
+/** One fighter's weapons: one melee weapon they always have, plus at most one gun. */
 export class Loadout {
-  constructor(gunId = 'pistol') {
+  constructor(gunId = 'pistol', meleeId = KNIFE) {
     this.gun = gunId;                 // null when unarmed
+    this.melee = meleeId;             // 'knife' or 'axe' - never empty
+    this.meleeOut = false;            // the axe is away: in flight, or stuck in something
+    this.meleeHits = 0;               // connecting swings since the axe was last in hand
     this.slot = gunId ? 'gun' : 'melee';
     const def = gunId ? WEAPONS[gunId] : null;
     this.ammo = def ? def.mag : 0;
@@ -32,7 +35,7 @@ export class Loadout {
     this.slashDir = 1;                // knife swings alternate sides
   }
 
-  get id() { return this.slot === 'melee' ? KNIFE : this.gun; }
+  get id() { return this.slot === 'melee' ? this.melee : this.gun; }
   get def() { return WEAPONS[this.id]; }
   get isMelee() { return this.slot === 'melee'; }
   get hasGun() { return !!this.gun; }
@@ -53,6 +56,22 @@ export class Loadout {
   }
 
   toggle() { return this.switchTo(this.slot === 'gun' ? 'melee' : 'gun'); }
+
+  /**
+   * Swap in a different melee weapon, handing back the one being replaced so it can be
+   * dropped. You always have exactly one, so this never leaves the slot empty.
+   */
+  takeMelee(meleeId) {
+    if (meleeId === this.melee) return null;
+    const old = this.melee;
+    this.swapFrom = this.id;
+    this.melee = meleeId;
+    this.meleeOut = false;
+    this.meleeHits = 0;
+    this.pendingMelee = 0;
+    if (this.slot === 'melee') { this.drawT = this.def.drawTime; this.cooldown = 0; }
+    return old;
+  }
 
   /** Swap in a new gun, handing back what was being carried so it can be dropped. */
   takeGun(gunId, ammo, reserve) {
@@ -107,6 +126,7 @@ export class Loadout {
     if (this.busy || this.cooldown > 0) return false;
     const def = this.def;
     if (def.kind === 'melee') {
+      if (this.meleeOut) return false;  // nothing in your hand to swing - callers recall instead
       this.cooldown = def.rate;
       this.pendingMelee = def.hitDelay;
       this.lastFire = now;

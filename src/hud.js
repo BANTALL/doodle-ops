@@ -499,7 +499,24 @@ export class Hud {
     this.text(def.name, x, y - 44, 19, 'right', INK);
 
     if (def.kind === 'melee') {
-      this.text('∞', x, y, 38, 'right', INK);
+      if (lo.meleeOut) {
+        // No ammo count for a weapon that isn't there - what you need to know is how to
+        // get it back.
+        this.text('THROWN', x, y - 4, 30, 'right', RED);
+        this.text('ATTACK TO RECALL', x, y + 18, 14, 'right', INK_SOFT);
+      } else if (def.throwEvery) {
+        // Three notches; the third one is the throw.
+        this.text('∞', x - 96, y, 38, 'right', INK);
+        const n = def.throwEvery;
+        for (let k = 0; k < n; k++) {
+          const bx = x - 78 + k * 28, by = y - 18;
+          this.rect(bx, by, 22, 22, 2.2, 104 + k);
+          if (k < lo.meleeHits) this.hatch(bx + 3, by + 3, 16, 16, 105 + k, INK, 5, 1.6);
+        }
+        this.text('THROW', x, y + 18, 13, 'right', INK_SOFT);
+      } else {
+        this.text('∞', x, y, 38, 'right', INK);
+      }
     } else {
       const low = lo.ammo <= Math.max(1, Math.floor(def.mag * 0.25));
       this.text(`${lo.ammo}`, x - 58, y, 40, 'right', low ? RED : INK);
@@ -520,7 +537,8 @@ export class Hud {
     const lo = game.player.loadout;
     const y = this.h - 116;
     const items = [
-      { key: '1', label: 'KNIFE', active: lo.isMelee },
+      // The melee slot names whatever is in it, and says so when the axe isn't in it.
+      { key: '1', label: lo.meleeOut ? `${WEAPONS[lo.melee].name}·OUT` : WEAPONS[lo.melee].name, active: lo.isMelee },
       { key: '2', label: lo.gun ? WEAPONS[lo.gun].name : '—', active: !lo.isMelee },
     ];
     let x = this.w - 236;

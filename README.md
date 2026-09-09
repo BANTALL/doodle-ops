@@ -32,19 +32,37 @@ bot count and the kill limit all live in the pause menu and persist between sess
 
 ## Weapons
 
-You carry the knife plus **one** gun. Picking a new gun up drops the one in your hands.
+You carry **one** melee weapon plus **one** gun. Picking either up drops the one it
+replaces.
 
 | | damage | rate of fire | magazine | notes |
 |---|---|---|---|---|
 | **Knife** | 42 | fast | — | long reach, 1.6× from behind, and you move quicker holding it |
+| **Axe** | 130 | one swing per 3s | — | two metres more reach than the knife, and it throws (below) |
 | **Pistol** | 26 | slow | 12 | the reliable middle |
 | **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope — **a scoped shot that connects kills outright** |
 
-Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
-a random gun, plus a heart 75% of the time (worth 5 HP, walked over rather than prompted
-for, by bots as well as you). Guns dropped by the dead fade off the page after about twenty seconds, so the
-crates stay worth opening; guns from crates stay put.
+Crates are scattered through the level. Break one and it coughs up a random gun — or, about
+one time in five, a melee weapon instead, which is the only way an axe enters a match. Either
+way a heart comes with it 75% of the time (worth 5 HP, walked over rather than prompted for,
+by bots as well as you). Guns dropped by the dead fade off the page after about twenty
+seconds, so the crates stay worth opening; what a crate gave you stays put.
+
+Your gun resets to a pistol when you respawn. Your melee weapon doesn't: once you've found
+the axe it's yours until somebody makes you trade it.
+
+### The axe
+
+It kills anything it touches, and the cost is that you get one swing every three seconds and
+the swing itself takes a full second of that. Land **three** hits on people and the third one
+carries the axe out of your hand: it flies, tumbling, and buries itself in whatever stops it —
+a body, a crate, a wall, the floor when it runs out of range. Your hand is empty until you
+**attack again**, which whistles it back to you rather than making you walk over and pick it
+up. The three notches next to the ammo counter are the throw meter.
+
+Bots pick axes up and swing them, and will cross a room for one. They never throw — the
+throw is yours.
 
 ## Doodlers
 
@@ -149,13 +167,22 @@ animation, and here it falls out of the update schedule rather than being faked.
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
 
-**Smear frames.** Anything that moves faster than twelve frames a second can resolve gets
-drawn more than once. The knife swing trails: because the pose is a pure function of the
-weapon timers, the same pose can be asked for a fraction of a step *ago* and drawn faintly
-behind the real blade, so the cut leaves a wake instead of teleporting between frames. The
-weapon swap twirl and the idle knife trick use the same trick, keyed off how fast that move
-is going. Paper shards get a velocity stretch, since a tumbling scrap has no rest shape to
-distort away from.
+**Smear frames** come in two kinds, because the two weapons want different things.
+
+The knife *trails*. Its pose is a pure function of the weapon timers, so the same pose can be
+asked for a fraction of a step ago and drawn faintly behind the real blade, and the cut leaves
+a wake instead of teleporting between frames. The swap twirl, the idle knife trick and a
+thrown axe in flight all work this way, keyed off how fast the move is going. Paper shards get
+a velocity stretch instead, since a tumbling scrap has no rest shape to distort away from.
+
+The axe is *drawn*. Its swing is twelve authored cels in `axeframes.js`, played one per
+animation step, and for that second the viewmodel **is** the cel — no 3D axe, no 3D hands.
+This is the thing a stretched mesh cannot fake: frames 4 to 8 have no haft, no head and no
+hand in them, and frame 6 is two crescents of ink with a hole where the weapon ought to be.
+For one twelfth of a second there is no object. That reads as speed; scaling the same mesh
+never will, because the eye recognises the shape and knows it's the same thing. All twelve
+are struck about one pivot — where the hands are — which is what keeps them reading as a
+single continuous swing rather than twelve drawings in a row.
 
 **The whole viewmodel is sampled at the last animation step**, not at the current
 instant — otherwise the weapon in your hands is the one thing on screen not moving on
@@ -193,6 +220,25 @@ walks a level — a wall stops the flood dead, so rooms with no line of sight ar
 reached. It's conservative in the safe direction: it can mark a chunk you can't quite see,
 but it cannot miss one you can. Typically 4–12 of 25 chunks survive, taking draw calls from
 ~126 down to 8–70. Bots, crates, pickups, decals and particles get a sphere test on top.
+
+**Distance detail.** Culling decides what to draw; this decides how badly. It's the Distant
+Horizons trade made backwards — that mod draws *more* world by drawing it worse, and here
+"worse" has an obvious meaning, because everything on screen is a drawing. Past about 24
+metres a wall, a crate or a bot keeps its colour and loses its pencil outline, the way the far
+half of a sketch is blocked in but not inked yet. Past 30 the incidental stuff — paper shards,
+bullet holes, puffs, impact marks — stops being drawn at all, and past 38 a weapon loses its
+moving parts and its floor smudge. Down a 40-metre sightline that takes ink from 22 draws to
+5, which is most of the frame: an ink mesh is a quad per line segment, and a chunk is
+thousands of them. There is no visible seam, because outlines fading out at distance is what
+the rest of the drawing already does.
+
+**Off-camera bots don't animate.** Re-baking a bot's body into fresh geometry is the most
+expensive thing an animation step does, so a bot nobody can see doesn't get one — tested
+against the same frustum the renderer is about to use, plus the occlusion mask, so a bot
+dead ahead but behind a wall is skipped too. Anyone within ten metres is always posed, since
+they can enter the view between steps. The frustum for that test is built fresh rather than
+reused from the last frame: at twelve frames a second, a fast turn would drop a bot for a
+whole twelfth of a second and you'd see them pop.
 
 The rest of the pipeline:
 
@@ -300,6 +346,8 @@ src/
   audio.js      WebAudio SFX (synthesised, plus the two pistol samples)
   input.js      pointer lock, keys, mouse
   settings.js   persisted settings
+  axeframes.js  the twelve drawn frames of an axe swing
+  thrownaxe.js  the axe once it has left your hand
   frustum.js    view frustum planes for culling
   math.js       vectors, matrices, RNG
 ```

@@ -2,7 +2,7 @@
 // holes, tracers, muzzle flashes, paper shards. Cosmetic motion is stepped on the 12fps
 // animation clock so it flip-books along with the characters.
 
-import { FillBuilder, InkBuilder, pushOrientedBox, shapeMeshes } from './geom.js';
+import { FillBuilder, InkBuilder, pushOrientedBox, pushShape, shapeMeshes } from './geom.js';
 import { MAT } from './renderer.js';
 import { M4, V, clamp, TAU } from './math.js';
 import { WEAPONS } from './weapons.js';
@@ -12,6 +12,19 @@ const ANIM_DT = 1 / 12;
 const PICKUP_TTL = 24;      // seconds a dropped gun lies around before it fades off the page
 const PICKUP_BLINK = 4;     // last few seconds, it flickers like it's being erased
 const HEART_TTL = 30;
+
+/**
+ * Distance levels of detail, in metres. This is the Distant Horizons trade made backwards:
+ * that mod draws *more* world by drawing it worse, and here "worse" has an obvious meaning
+ * because everything on screen is a drawing. Past INK a prop keeps its colour but loses its
+ * pencil outline, which is exactly what a sketch does when the artist stops bothering with
+ * the far half of the page. Past DETAIL it loses its moving parts and its floor smudge, and
+ * past SMALL the incidental stuff - shards, holes, puffs, impact marks - stops being drawn
+ * at all. Ink is the expensive pass, so this is also where most of the time comes back.
+ */
+export const LOD_INK = 24;
+export const LOD_DETAIL = 38;
+export const LOD_SMALL = 30;
 
 function buildCrateMesh(gl) {
   const f = new FillBuilder(), i = new InkBuilder();
@@ -40,6 +53,49 @@ function buildHeartMesh(gl) {
     pts.push([x * 0.0105, y * 0.0105 + 0.055]);
   }
   return shapeMeshes(gl, pts, MAT.RED, 2.4, 0.06);
+}
+
+/**
+ * A crescent, for the mark a melee swing leaves in the air. Drawn as a ring segment so it
+ * has a thick middle and tapers to nothing at both ends - the shape you'd draw to mean
+ * "something went through here", rather than a straight line.
+ */
+function buildSlashMesh(gl) {
+  const pts = [];
+  const N = 16, R = 0.5, SWEEP = 2.5;
+  for (let k = 0; k <= N; k++) {
+    const t = k / N, a = -SWEEP * 0.5 + SWEEP * t;
+    const w = 0.115 * Math.sin(Math.PI * t) ** 0.7;
+    pts.push([Math.cos(a) * (R + w), Math.sin(a) * (R + w)]);
+  }
+  for (let k = N; k >= 0; k--) {
+    const t = k / N, a = -SWEEP * 0.5 + SWEEP * t;
+    const w = 0.115 * Math.sin(Math.PI * t) ** 0.7;
+    pts.push([Math.cos(a) * (R - w), Math.sin(a) * (R - w)]);
+  }
+  // Star-shaped about the tip where the two edges meet, so the fan fills it correctly.
+  return shapeMeshes(gl, pts, MAT.DARK, 2.2, 0.02);
+}
+
+/** Radiating dashes - the "pow" a cartoon draws where two things meet. */
+function buildBurstMesh(gl) {
+  const f = new FillBuilder(), i = new InkBuilder();
+  const N = 9;
+  for (let k = 0; k < N; k++) {
+    const a = (k / N) * TAU + 0.19;
+    const r0 = 0.26 + ((k * 7) % 5) * 0.035;
+    const r1 = r0 + 0.30 + ((k * 3) % 4) * 0.07;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const nx = -sa, ny = ca;
+    const w0 = 0.048, w1 = 0.010;
+    pushShape(f, i, [
+      [ca * r0 + nx * w0, sa * r0 + ny * w0],
+      [ca * r1 + nx * w1, sa * r1 + ny * w1],
+      [ca * r1 - nx * w1, sa * r1 - ny * w1],
+      [ca * r0 - nx * w0, sa * r0 - ny * w0],
+    ], MAT.DARK, 1.9);
+  }
+  return { fill: f.toMesh(gl), ink: i.toMesh(gl) };
 }
 
 function buildShardMesh(gl) {
@@ -109,6 +165,8 @@ export class Entities {
     this.crateMesh = buildCrateMesh(gl);
     this.shardMesh = buildShardMesh(gl);
     this.heartMesh = buildHeartMesh(gl);
+    this.slashMesh = buildSlashMesh(gl);
+    this.burstMesh = buildBurstMesh(gl);
 
     this.crates = [];
     this.pickups = [];
@@ -117,6 +175,8 @@ export class Entities {
     this.flashes = [];
     this.shards = [];
     this.puffs = [];
+    this.slashes = [];
+    this.bursts = [];
 
     this.animFrame = 0;
     this._m = M4.create();
@@ -161,19 +221,26 @@ export class Entities {
   spawnPickup(gunId, pos, ammo, reserve, kick = true, permanent = false) {
     const p = V.clone(pos);
     p.y = Math.max(0.22, p.y);
+    // Melee weapons ride the same list as guns; slotKind is what tells the picker-upper
+    // whether this replaces the thing in their hand or the thing on their back.
+    const def = WEAPONS[gunId];
+    const melee = def.slot === 'melee';
     this.pickups.push({
-      kind: 'gun', gunId, pos: p,
+      kind: 'gun', gunId, slotKind: def.slot, pos: p,
       vel: kick ? V.make(this.rng.range(-1.6, 1.6), this.rng.range(1.2, 2.6), this.rng.range(-1.6, 1.6)) : V.make(0, 0, 0),
-      ammo: ammo ?? WEAPONS[gunId].mag,
-      reserve: reserve ?? Math.round(WEAPONS[gunId].reserve * 0.35),
+      ammo: melee ? 0 : (ammo ?? def.mag),
+      reserve: melee ? 0 : (reserve ?? Math.round(def.reserve * 0.35)),
       grounded: false,
       spin: this.rng.range(0, TAU),
       ttl: permanent ? Infinity : PICKUP_TTL,
       highlight: 0,
     });
     if (this.pickups.length > 18) {
-      // Evict the oldest perishable drop rather than whatever happens to be first.
-      const i = this.pickups.findIndex((q) => q.ttl !== Infinity);
+      // Evict the oldest perishable drop rather than whatever happens to be first, and
+      // when they're all permanent, take a gun before a melee weapon: guns fall out of
+      // crates constantly and an axe is the rarest thing on the floor.
+      let i = this.pickups.findIndex((q) => q.ttl !== Infinity);
+      if (i < 0) i = this.pickups.findIndex((q) => q.slotKind !== 'melee');
       this.pickups.splice(i >= 0 ? i : 0, 1);
     }
   }
@@ -181,7 +248,7 @@ export class Entities {
   /** Heart drop. Walked over rather than pressed for - it's a top-up, not a choice. */
   spawnHeart(pos) {
     this.pickups.push({
-      kind: 'heart', gunId: null,
+      kind: 'heart', gunId: null, slotKind: null,
       pos: V.make(pos.x + this.rng.range(-0.4, 0.4), Math.max(0.30, pos.y), pos.z + this.rng.range(-0.4, 0.4)),
       vel: V.make(this.rng.range(-1.2, 1.2), this.rng.range(1.6, 2.8), this.rng.range(-1.2, 1.2)),
       ammo: 0, reserve: 0, grounded: false,
@@ -212,6 +279,21 @@ export class Entities {
 
   addPuff(pos, size = 0.3) {
     this.puffs.push({ pos: V.clone(pos), size, frames: 3, age: 0, roll: this.rng.range(0, TAU) });
+  }
+
+  /**
+   * The arc a swing leaves behind. `roll` orients it in the camera plane, so a right-to-left
+   * axe swing leaves a mark lying the way the axe went rather than a generic ring.
+   */
+  addSlash(pos, size, roll, frames = 3) {
+    this.slashes.push({ pos: V.clone(pos), size, roll, frames, age: 0 });
+    if (this.slashes.length > 12) this.slashes.shift();
+  }
+
+  /** Impact dashes. Three frames, growing and thinning out. */
+  addBurst(pos, size = 0.5, frames = 3) {
+    this.bursts.push({ pos: V.clone(pos), size, frames, age: 0, roll: this.rng.range(0, TAU) });
+    if (this.bursts.length > 16) this.bursts.shift();
   }
 
   addShards(pos, count, spread = 3.2) {
@@ -301,6 +383,16 @@ export class Entities {
       p.age++; p.size *= 1.35; p.pos.y += 0.05;
       if (--p.frames <= 0) this.puffs.splice(i, 1);
     }
+    for (let i = this.slashes.length - 1; i >= 0; i--) {
+      const sl = this.slashes[i];
+      sl.age++; sl.size *= 1.22;
+      if (--sl.frames <= 0) this.slashes.splice(i, 1);
+    }
+    for (let i = this.bursts.length - 1; i >= 0; i--) {
+      const b = this.bursts[i];
+      b.age++; b.size *= 1.30;
+      if (--b.frames <= 0) this.bursts.splice(i, 1);
+    }
     for (let i = this.decals.length - 1; i >= 0; i--) if (--this.decals[i].life <= 0) this.decals.splice(i, 1);
 
     for (let i = this.shards.length - 1; i >= 0; i--) {
@@ -337,6 +429,9 @@ export class Entities {
     const m = this._m;
     const frame = this.animFrame;
     const fr = r.frustum;
+    const ex = cam.pos.x, ey = cam.pos.y, ez = cam.pos.z;
+    const d2 = (p) => (p.x - ex) ** 2 + (p.y - ey) ** 2 + (p.z - ez) ** 2;
+    const inkLod = LOD_INK * LOD_INK, detailLod = LOD_DETAIL * LOD_DETAIL, smallLod = LOD_SMALL * LOD_SMALL;
 
     // Crates. A hit makes them jolt for a couple of animation frames.
     for (const c of this.crates) {
@@ -350,7 +445,8 @@ export class Entities {
       M4.compose(m, p, c.yaw + sh * 0.3, 0, 0, c.size, c.size, c.size);
       const opts = { objSeed: (c.pos.x * 3.1 + c.pos.z * 7.7) % 64 };
       r.fill(this.crateMesh.fill, m, opts);
-      r.ink(this.crateMesh.ink, m, opts);
+      if (d2(c.pos) < inkLod) r.ink(this.crateMesh.ink, m, opts);
+      else r.stats.inkLod++;
     }
 
     // Dropped weapons: hover, turn, and lean in a way that reads as "pick me up".
@@ -361,6 +457,7 @@ export class Entities {
       r.stats.props++;
       if (!fr.sphere(p.pos.x, p.pos.y + 0.15, p.pos.z, 1.1)) continue;
       r.stats.propsDrawn++;
+      const dp = d2(p.pos);
       // Flicker out at the end of its life, one animation frame on, one off.
       if (p.ttl < PICKUP_BLINK && (frame & 1)) continue;
       const bobT = frame / 12 + p.spin;
@@ -379,9 +476,14 @@ export class Entities {
         r.ink(this.heartMesh.ink, m, opts);
       } else {
         r.fill(model.body.fill, m, opts);
-        r.ink(model.body.ink, m, opts);
-        if (model.moving) { r.fill(model.moving.fill, m, opts); r.ink(model.moving.ink, m, opts); }
+        if (dp < inkLod) r.ink(model.body.ink, m, opts); else r.stats.inkLod++;
+        // Moving parts are a slide or a magazine: at this range nobody can tell.
+        if (model.moving && dp < detailLod) {
+          r.fill(model.moving.fill, m, opts);
+          if (dp < inkLod) r.ink(model.moving.ink, m, opts);
+        }
       }
+      if (dp >= detailLod) continue;
       // Pencil smudge on the floor so the item is grounded in the drawing.
       V.set(this._tmp, p.pos.x, 0.012, p.pos.z);
       decalMatrix(m, this._tmp, { x: 0, y: 1, z: 0 }, 0.85 + hi * 0.25, p.spin);
@@ -390,6 +492,7 @@ export class Entities {
 
     // Paper shards.
     for (const s of this.shards) {
+      if (d2(s.pos) > smallLod) continue;
       if (!fr.sphere(s.pos.x, s.pos.y, s.pos.z, s.size)) continue;
       const fade = clamp(s.life / 0.6, 0, 1);
       if (fade <= 0.15) continue;
@@ -407,11 +510,30 @@ export class Entities {
       }
       const opts = { objSeed: s.spin[0] * 3.7 };
       r.fill(this.shardMesh.fill, mm, opts);
-      r.ink(this.shardMesh.ink, mm, opts);
+      if (d2(s.pos) < inkLod) r.ink(this.shardMesh.ink, mm, opts); else r.stats.inkLod++;
+    }
+
+    // Melee marks: a crescent where the swing passed, then the dashes of the impact.
+    for (const sl of this.slashes) {
+      if (d2(sl.pos) > smallLod) continue;
+      if (!fr.sphere(sl.pos.x, sl.pos.y, sl.pos.z, sl.size)) continue;
+      billboard(m, sl.pos, sl.size, cam.right, cam.up, cam.fwd, sl.roll);
+      const a = 1 - sl.age * 0.30;
+      r.fill(this.slashMesh.fill, m, { objSeed: sl.roll * 5.1, alpha: a });
+      r.ink(this.slashMesh.ink, m, { objSeed: sl.roll * 5.1, alpha: a, widthScale: 1.3 });
+    }
+    for (const b of this.bursts) {
+      if (d2(b.pos) > smallLod) continue;
+      if (!fr.sphere(b.pos.x, b.pos.y, b.pos.z, b.size)) continue;
+      billboard(m, b.pos, b.size, cam.right, cam.up, cam.fwd, b.roll + b.age * 0.22);
+      const a = 1 - b.age * 0.32;
+      r.fill(this.burstMesh.fill, m, { objSeed: b.roll * 2.3, alpha: a });
+      r.ink(this.burstMesh.ink, m, { objSeed: b.roll * 2.3, alpha: a, widthScale: 1.2 });
     }
 
     // Bullet holes.
     for (const d of this.decals) {
+      if (d2(d.pos) > smallLod) continue;
       if (!fr.sphere(d.pos.x, d.pos.y, d.pos.z, d.size)) continue;
       decalMatrix(m, d.pos, d.normal, d.size, d.roll);
       const fade = clamp(d.life / 8, 0, 1);
@@ -431,6 +553,7 @@ export class Entities {
       r.quad(r.texFlash, m, [1.0, 0.93, 0.62, 0.95]);
     }
     for (const p of this.puffs) {
+      if (d2(p.pos) > smallLod) continue;
       if (!fr.sphere(p.pos.x, p.pos.y, p.pos.z, p.size)) continue;
       billboard(m, p.pos, p.size, cam.right, cam.up, cam.fwd, p.roll);
       r.quad(r.texPuff, m, [0.42, 0.40, 0.38, 0.55 / (1 + p.age)]);
