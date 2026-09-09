@@ -40,7 +40,7 @@ You carry the knife plus **one** gun. Picking a new gun up drops the one in your
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope; two body shots or one head |
 
 Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
-a random gun, plus a heart 75% of the time (worth 2 HP, walked over rather than prompted
+a random gun, plus a heart 75% of the time (worth 5 HP, walked over rather than prompted
 for, by bots as well as you). Guns dropped by the dead fade off the page after about twenty seconds, so the
 crates stay worth opening; guns from crates stay put.
 
@@ -55,15 +55,14 @@ You pick a class before the match. Skill is on `Q`; weapons stay on scroll and `
 | **Mechanist** | 85 HP, normal speed, +55% boost cap | scribbled turrets, two per cooldown |
 | **Runner** | 90 HP, +10% speed, +70% boost cap | a forward slide every 4s |
 
-The **guardian's** shield hangs half a second behind everything you do — it reads its
-owner's pose out of a short history buffer rather than following live, which is what gives
-it the drag. It absorbs 50 damage as a real hitscan blocker: shots are tested against its
+The **guardian's** shield tracks you immediately and absorbs 50 damage as a real hitscan
+blocker: shots are tested against its
 oriented box *before* bodies, so anyone behind it is covered for free. Your own shots pass
 straight through, because a shield you can't fire past is a punishment rather than a skill.
 `Q` only patches it once it's under 10 — a healthy one refuses, a broken one is replaced, a
 damaged one goes back to 50 — on a 55 second cooldown.
 
-The **mechanist's** turrets carry 100 rounds at 5 damage on an M4 cadence and vanish after
+The **mechanist's** turrets carry 100 rounds at 2 damage on an M4 cadence and vanish after
 a minute or when empty. Their shots are attributed to whoever placed them, so a turret
 can't hit its owner and its kills are theirs — which also means the bots blame you for it.
 
@@ -145,10 +144,15 @@ animation, and here it falls out of the update schedule rather than being faked.
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
 
-**Smear frames.** The viewmodel pose is a pure function of the weapon timers, so the same
-pose can be asked for a few milliseconds "ago" and drawn as a fainter outline behind the
-real one. Fast actions trail; slow ones don't. It's what hand-drawn animation does on a
-fast action, and at twelve frames a second it's the only honest way to sell speed.
+**Smear frames.** A smear frame deforms the thing. The viewmodel pose is a pure function
+of the weapon timers, so the pose from one animation step ago can be asked for, a reference
+point on the weapon tracked between the two, and the whole model stretched along the
+direction it actually travelled and squashed across it — hands, sleeves and muzzle flash
+through the same matrix, so nothing detaches. Its silhouette for that frame genuinely is
+not its resting silhouette, which is the entire point: drawing the same shape twice is a
+double exposure. One trailing ghost survives, stretched harder still, so it reads as a
+second *shape* rather than a second copy. Paper shards stretch along their velocity, and a
+bot's weapon stretches along the arc its hand swept since the last step.
 
 **The whole viewmodel is sampled at the last animation step**, not at the current
 instant — otherwise the weapon in your hands is the one thing on screen not moving on
@@ -166,8 +170,14 @@ the spin in it, so the knife turns inside a steady hand rather than the whole fi
 cartwheeling with it.
 
 **Sniper impact frame.** A sniper round that connects blacks out the page except for a
-ragged white hole blown open at the point of impact. Real-time driven, so it lasts 0.65s at
-any frame rate: a short hold at full strength, then a fade so you get your view back.
+ragged white hole blown open at the point of impact, with a shock ring racing out ahead of
+it — the picture is shoved outward as the wavefront passes, and the ring keeps travelling
+over the scene after the black frame has faded back. Real-time driven, so it lasts 0.65s at
+any frame rate.
+
+**Kill streak.** A drop of ink falls in from above — stretched thin by its own speed on the
+way down — splatters flat, wobbles out of it, and holds your streak count knocked out of
+the ink. It resets when you die and when the match is decided.
 
 **Culling.** The level is built as chunks of 6×6 cells, each with its own meshes and
 bounding box, because a single map-sized mesh can only ever be drawn whole. Frustum culling
@@ -202,28 +212,11 @@ The rest of the pipeline:
   exactly where it stops. Your own gun stays coloured wherever you are, because a white gun
   against a white floor is unreadable.
 
-## Doodlers
+## Winning
 
-You pick a class before the match. Skill is on `Q`; weapons stay on scroll and `1`/`2`.
-
-| | statline | skill |
-|---|---|---|
-| **Normie** | 100 HP, normal speed, +55% boost cap | — |
-| **Guardian** | 100 HP, −10% speed, +40% boost cap | a paper shield that floats in front of you |
-| **Mechanist** | 85 HP, normal speed, +55% boost cap | scribbled turrets, two per cooldown |
-| **Runner** | 90 HP, +10% speed, +70% boost cap | a forward slide every 4s |
-
-The **guardian's** shield hangs half a second behind everything you do — it reads its
-owner's pose out of a short history buffer rather than following live, which is what gives
-it the drag. It absorbs 50 damage as a real hitscan blocker: shots are tested against its
-oriented box *before* bodies, so anyone behind it is covered for free. Your own shots pass
-straight through, because a shield you can't fire past is a punishment rather than a skill.
-`Q` only patches it once it's under 10 — a healthy one refuses, a broken one is replaced, a
-damaged one goes back to 50 — on a 55 second cooldown.
-
-The **mechanist's** turrets carry 100 rounds at 5 damage on an M4 cadence and vanish after
-a minute or when empty. Their shots are attributed to whoever placed them, so a turret
-can't hit its owner and its kills are theirs — which also means the bots blame you for it.
+First to the kill limit takes it, but the popup waits two seconds. The bots stand down and
+you keep control for those two seconds, so the moment you won on is yours to look at rather
+than something a dialog lands on top of.
 
 ## Running it locally
 
