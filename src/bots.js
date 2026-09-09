@@ -130,6 +130,13 @@ export class Bot {
     // Eased toward the map's colour mask, so crossing the border drains the colour out of
     // a bot over about a second rather than wiping across their body per pixel.
     this.colorAmt = 1;
+    // Previous animation step's transform, for smearing fast motion.
+    this.prevAnimPos = V.make();
+    this.gripWorld = V.make();
+    this.prevGripWorld = V.make();
+    this.hasGrip = false;
+    this._mSmear = M4.create();
+    this._mSmear2 = M4.create();
 
     this._m = M4.create();
     this._dir = V.make();
@@ -618,6 +625,16 @@ export class Bot {
   update(dt, now) {
     if (!this.alive) { this.deathTimer += dt; return; }
 
+    if (this.game.aiFrozen) {
+      // Match is over bar the popup: stop thinking, stop shooting, just come to a stop.
+      this.vel.x *= 1 - Math.min(1, 6 * dt);
+      this.vel.z *= 1 - Math.min(1, 6 * dt);
+      this.vel.y -= GRAVITY * dt;
+      this.aimAmt = damp(this.aimAmt, 0, 4, dt);
+      this.game.moveActor(this, dt);
+      return;
+    }
+
     this.colorAmt = damp(this.colorAmt, this.game.map.colorAmountAt(this.pos.x, this.pos.z), 1.8, dt);
     this.flinch = Math.max(0, this.flinch - dt * 2.2);
     this.hurtAnim = Math.max(0, this.hurtAnim - dt * 3);
@@ -685,6 +702,7 @@ export class Bot {
 
     // Snap the rendered transform to this animation step: the bot slides at 60fps under
     // the hood but is *drawn* on twelves, which is where the stop-motion feel comes from.
+    V.copy(this.prevAnimPos, this.hasGrip ? this.animPos : this.pos);
     V.copy(this.animPos, this.pos);
     this.animYaw = this.yaw;
     this.animPitch = this.pitch;
@@ -708,6 +726,27 @@ export class Bot {
       crouch: 0,
       twoHanded: this.loadout.hasGun && !this.loadout.isMelee,
     });
+
+    // Track where the weapon hand was, so a swing or a fast turn can smear the weapon.
+    const g = this.rig.grip;
+    if (g) {
+      const cy = Math.cos(this.animYaw), sy = Math.sin(this.animYaw);
+      V.copy(this.prevGripWorld, this.hasGrip ? this.gripWorld : this.animPos);
+      V.set(this.gripWorld,
+        this.animPos.x + cy * g[0] + sy * g[2],
+        this.animPos.y + g[1],
+        this.animPos.z - sy * g[0] + cy * g[2]);
+      if (!this.hasGrip) { V.copy(this.prevGripWorld, this.gripWorld); this.hasGrip = true; }
+    }
+  }
+
+  /** Stretch matrix for something that moved from `from` to `to` this animation step. */
+  _smearFor(out, model, pivot, from, to, gain, cap) {
+    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d < 0.045) return model;
+    const along = 1 + clamp(d * gain, 0, cap);
+    return M4.stretchAbout(out, model, pivot, [dx / d, dy / d, dz / d], along, 1 / Math.sqrt(along));
   }
 
   render(r, cam) {
@@ -715,8 +754,10 @@ export class Bot {
     const seed = this.index * 17.3;
     const tint = { objSeed: seed, colorAmt: this.colorAmt };
     M4.compose(m, this.animPos, this.animYaw, 0, 0, 1, 1, 1);
-    r.fill(this.rig.fill, m, tint);
-    r.ink(this.rig.ink, m, { objSeed: seed });
+    const body = this._smearFor(this._mSmear, m,
+      [this.animPos.x, this.animPos.y + 0.9, this.animPos.z], this.prevAnimPos, this.animPos, 1.5, 0.45);
+    r.fill(this.rig.fill, body, tint);
+    r.ink(this.rig.ink, body, { objSeed: seed });
 
     // Pencil smudge underneath: without it a character reads as pasted onto the page.
     const shadow = M4.create();
@@ -737,7 +778,12 @@ export class Bot {
         this.animPos.x + cy * g[0] + sy * g[2],
         this.animPos.y + g[1],
         this.animPos.z - sy * g[0] + cy * g[2]);
-      const held = M4.compose(m, this._tmp, this.animYaw, this.rig.gripPitch, 0, 1, 1, 1);
+      const raw = M4.compose(m, this._tmp, this.animYaw, this.rig.gripPitch, 0, 1, 1, 1);
+      // A knife swing moves the hand a long way in one animation step; the weapon gets
+      // stretched along that arc rather than being drawn twice.
+      const held = this._smearFor(this._mSmear2, raw,
+        [this.gripWorld.x, this.gripWorld.y, this.gripWorld.z],
+        this.prevGripWorld, this.gripWorld, 2.2, 1.3);
       const wOpts = { objSeed: seed + 3, colorAmt: this.colorAmt };
       r.fill(model.body.fill, held, wOpts);
       r.ink(model.body.ink, held, { objSeed: seed + 3 });
@@ -746,9 +792,9 @@ export class Bot {
       if (this.flashFrames > 0 && lo.def.kind === 'gun') {
         const mz = MUZZLE[lo.id];
         const wp = V.make(
-          held[0] * mz[0] + held[4] * mz[1] + held[8] * mz[2] + held[12],
-          held[1] * mz[0] + held[5] * mz[1] + held[9] * mz[2] + held[13],
-          held[2] * mz[0] + held[6] * mz[1] + held[10] * mz[2] + held[14]);
+          raw[0] * mz[0] + raw[4] * mz[1] + raw[8] * mz[2] + raw[12],
+          raw[1] * mz[0] + raw[5] * mz[1] + raw[9] * mz[2] + raw[13],
+          raw[2] * mz[0] + raw[6] * mz[1] + raw[10] * mz[2] + raw[14]);
         this.game.entities.addFlash(wp, lo.id === 'sniper' ? 0.62 : 0.42);
         this.flashFrames = 0;
       }

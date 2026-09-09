@@ -5,11 +5,12 @@ import { FillBuilder, InkBuilder, pushOrientedBox } from './geom.js';
 import { MAT } from './renderer.js';
 import { M4, V, clamp, dirFrom, yawOf, TAU } from './math.js';
 import { rayBox } from './entities.js';
+import { SHIELD_OUTLINE } from './textures.js';
 import { resolveShot, spreadDir } from './combat.js';
 import { Sfx } from './audio.js';
 
 export const SHIELD_MAX_HP = 50;
-export const SHIELD_LAG = 0.5;          // seconds the shield trails your movement
+export const SHIELD_LAG = 0;            // the shield tracks you immediately
 export const SHIELD_PATCH_BELOW = 10;   // you can only patch it once it's nearly gone
 const SHIELD_HALF = [0.72, 0.78, 0.06];
 const SHIELD_FORWARD = 1.15;            // how far in front of the owner it floats
@@ -22,7 +23,7 @@ export const TURRET_RANGE = 55;
 /** Weapon profile the turret shoots with. Reuses the M4's sound and tracer. */
 const TURRET_GUN = {
   id: 'm4', name: 'TURRET', kind: 'gun',
-  damage: 5, headMult: 1.5, rate: 0.082, range: TURRET_RANGE,
+  damage: 2, headMult: 1.5, rate: 0.082, range: TURRET_RANGE,
   spread: 1.7, moveSpread: 0, recoil: 0, recoilSide: 0, auto: true,
   mag: TURRET_AMMO, reserve: 0, reload: 1, moveMult: 1, drawTime: 0,
 };
@@ -32,12 +33,7 @@ export function buildSkillMeshes(gl) {
   // A box outline would fight the tapered silhouette in the texture, so trace that shape.
   const si = new InkBuilder();
   const W = SHIELD_HALF[0], T = SHIELD_HALF[1];
-  const outline = [
-    [-W, T * 0.76, 0], [-W * 0.55, T * 0.98, 0], [0, T, 0], [W * 0.55, T * 0.98, 0], [W, T * 0.76, 0],
-    [W * 0.97, -T * 0.10, 0], [W * 0.68, -T * 0.62, 0], [0, -T, 0],
-    [-W * 0.68, -T * 0.62, 0], [-W * 0.97, -T * 0.10, 0],
-  ];
-  si.polyline(outline, 2.9, true);
+  si.polyline(SHIELD_OUTLINE.map(([x, y]) => [x * W, y * T, 0]), 3.0, true);
 
   // --- turret: a squat tripod with a swivelling head
   const bf = new FillBuilder(), bi = new InkBuilder();
@@ -81,8 +77,6 @@ export class Shield {
     this.yaw = owner.yaw;
     this.hitFlash = 0;
     this.bornAt = 0;
-    // Ring buffer of where the owner has been, so we can read their pose half a second ago.
-    this._hist = [];
     this._m = M4.create();
     this._o = V.make();
     this._d = V.make();
@@ -96,15 +90,12 @@ export class Shield {
 
   update(dt, time) {
     const o = this.owner;
-    this._hist.push({ t: time, x: o.pos.x, y: o.pos.y, z: o.pos.z, yaw: o.yaw });
-    while (this._hist.length > 2 && this._hist[1].t <= time - SHIELD_LAG) this._hist.shift();
-    const past = this._hist[0];
-    const dir = dirFrom(past.yaw, 0, this._d);
+    const dir = dirFrom(o.yaw, 0, this._d);
     V.set(this.pos,
-      past.x + dir.x * SHIELD_FORWARD,
-      past.y + SHIELD_HEIGHT,
-      past.z + dir.z * SHIELD_FORWARD);
-    this.yaw = past.yaw;
+      o.pos.x + dir.x * SHIELD_FORWARD,
+      o.pos.y + SHIELD_HEIGHT,
+      o.pos.z + dir.z * SHIELD_FORWARD);
+    this.yaw = o.yaw;
     this.hitFlash = Math.max(0, this.hitFlash - dt * 2.5);
   }
 
@@ -144,8 +135,14 @@ export class Shield {
     m[8] = s; m[9] = 0; m[10] = c; m[11] = 0;
     m[12] = this.pos.x; m[13] = this.pos.y; m[14] = this.pos.z; m[15] = 1;
     const frac = this.hp / SHIELD_MAX_HP;
-    // Bleeds from paper-blue to red as it takes damage, so you can read it at a glance.
-    const tint = [0.55 + (1 - frac) * 0.42, 0.72 - (1 - frac) * 0.42, 0.95 - (1 - frac) * 0.6, 0.35 + this.hitFlash * 0.25];
+    const hurt = 1 - frac;
+    // Bleeds from paper-blue toward red as it takes damage, so you can read it at a glance.
+    const tint = [
+      0.62 + hurt * 0.33,
+      0.78 - hurt * 0.40,
+      0.96 - hurt * 0.55,
+      0.35 + this.hitFlash * 0.28,
+    ];
     r.quad(r.texShield, m, tint);
 
     M4.compose(m, this.pos, this.yaw + wobble, 0, wobble, 1, 1, 1);

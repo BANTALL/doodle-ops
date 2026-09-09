@@ -155,6 +155,32 @@ export const M4 = {
     return o3;
   },
 
+  /**
+   * A real smear frame: stretch `model` about `pivot` along `dir` by `along`, squashing
+   * toward that axis by `perp`. The object's actual shape is deformed for the frame, which
+   * is what sells speed - drawing the same silhouette twice just looks like a double
+   * exposure. out = T(p) * S * T(-p) * model.
+   */
+  stretchAbout(out, model, pivot, dir, along, perp) {
+    const dx = dir[0], dy = dir[1], dz = dir[2];
+    const k = along - perp;
+    const a00 = perp + k * dx * dx, a01 = k * dx * dy, a02 = k * dx * dz;
+    const a10 = k * dy * dx, a11 = perp + k * dy * dy, a12 = k * dy * dz;
+    const a20 = k * dz * dx, a21 = k * dz * dy, a22 = perp + k * dz * dz;
+    const px = pivot[0], py = pivot[1], pz = pivot[2];
+    const tx = px - (a00 * px + a01 * py + a02 * pz);
+    const ty = py - (a10 * px + a11 * py + a12 * pz);
+    const tz = pz - (a20 * px + a21 * py + a22 * pz);
+    for (let c = 0; c < 4; c++) {
+      const m0 = model[c * 4], m1 = model[c * 4 + 1], m2 = model[c * 4 + 2], m3 = model[c * 4 + 3];
+      out[c * 4]     = a00 * m0 + a01 * m1 + a02 * m2 + tx * m3;
+      out[c * 4 + 1] = a10 * m0 + a11 * m1 + a12 * m2 + ty * m3;
+      out[c * 4 + 2] = a20 * m0 + a21 * m1 + a22 * m2 + tz * m3;
+      out[c * 4 + 3] = m3;
+    }
+    return out;
+  },
+
   /** Standard look-at view matrix. Used to aim the shadow camera down at the level. */
   lookAt(o, eye, target, up) {
     let zx = eye.x - target.x, zy = eye.y - target.y, zz = eye.z - target.z;

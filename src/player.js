@@ -131,6 +131,14 @@ export class Player {
     this._m = M4.create();
     this._m2 = M4.create();
     this._m3 = M4.create();
+    this._mA = M4.create();
+    this._mB = M4.create();
+    this._mS = M4.create();
+    this._mG = M4.create();
+    this._mArm = M4.create();
+    this._mArm2 = M4.create();
+    this._identity = M4.identity(M4.create());
+    this._smearPool = [M4.create(), M4.create(), M4.create(), M4.create(), M4.create(), M4.create(), M4.create(), M4.create()];
     this._poseScratch = [makePose(), makePose(), makePose(), makePose()];
     this._dir = V.make();
     this._hit = {};
@@ -724,30 +732,58 @@ export class Player {
     const main = this._vmPose(lag, scratch[0]);
     if (!this.game.weapons.models[main.id]) return;
 
-    // Ghost outlines trail the real weapon along its own motion. Hand-drawn animation
-    // does exactly this on a fast action, and it's the only honest way to sell speed
-    // when the thing is only being drawn twelve times a second.
-    if (main.smear > 0.06) {
-      const ghosts = main.smear > 0.65 ? 3 : 2;
-      for (let k = ghosts; k >= 1; k--) {
-        const g = this._vmPose(lag + k * (1 / 12) * 0.33, scratch[k]);
-        if (this.game.weapons.models[g.id]) {
-          this._drawWeapon(r, g, clamp(main.smear, 0, 1) * (0.34 / k), true);
-        }
-      }
+    // ---- smear -----------------------------------------------------------
+    // A real smear frame deforms the thing: the weapon is stretched along the direction
+    // it actually travelled since the last animation step and squashed across it, so its
+    // silhouette for this frame is not its resting silhouette. Drawing the same shape
+    // twice is a double exposure, not a smear.
+    const prev = this._vmPose(lag + 1 / 12, scratch[3]);
+    const ref = MUZZLE[main.id] ?? [0, 0, -0.30];
+    const pA = applyMat(this._poseMatrix(main, this._mA), ref);
+    const pB = applyMat(this._poseMatrix(prev, this._mB), ref);
+    const dx = pA[0] - pB[0], dy = pA[1] - pB[1], dz = pA[2] - pB[2];
+    const travel = Math.hypot(dx, dy, dz);
+
+    let S = null;
+    if (travel > 0.020) {
+      const dir = [dx / travel, dy / travel, dz / travel];
+      const along = 1 + clamp(travel * 2.6, 0, 1.5);
+      // Squash across the direction of travel, so it stretches rather than just inflating.
+      const perp = 1 / Math.sqrt(along);
+      S = M4.stretchAbout(this._mS, this._identity, [main.px, main.py, main.pz], dir, along, perp);
+
+      // One trailing ghost, stretched harder still - a second shape, not a second copy.
+      const ghostAlong = 1 + clamp(travel * 4.2, 0, 2.4);
+      const G = M4.stretchAbout(this._mG, this._identity,
+        [lerp(prev.px, main.px, 0.45), lerp(prev.py, main.py, 0.45), lerp(prev.pz, main.pz, 0.45)],
+        dir, ghostAlong, 1 / Math.sqrt(ghostAlong));
+      const mid = this._vmPose(lag + (1 / 12) * 0.5, scratch[1]);
+      if (this.game.weapons.models[mid.id]) this._drawWeapon(r, mid, 0.30, true, G);
     }
-    this._drawWeapon(r, main, 1, false);
+
+    this._drawWeapon(r, main, 1, false, S);
   }
 
-  _drawWeapon(r, pose, alpha, inkOnly) {
+  /** Model matrix for a pose, without any smear applied. */
+  _poseMatrix(pose, out) {
+    const s = pose.scale;
+    return M4.compose(out, { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.rx, pose.rz, s, s, s);
+  }
+
+  _drawWeapon(r, pose, alpha, inkOnly, smear) {
     const model = this.game.weapons.models[pose.id];
     const s = pose.scale;
     const m = this._m;
     M4.compose(m, { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.rx, pose.rz, s, s, s);
     const opts = { objSeed: 3.7, alpha, colorAmt: this.colorAmt };
+    // Everything the viewmodel draws goes through the same deformation, so the hands and
+    // sleeves stretch with the weapon instead of detaching from it.
+    const pool = this._smearPool;
+    let pi = 0;
+    const sm = (mat) => (smear ? M4.mul(pool[pi++ % pool.length], smear, mat) : mat);
 
-    if (!inkOnly) r.vmFill(model.body.fill, m, opts);
-    r.vmInk(model.body.ink, m, opts);
+    if (!inkOnly) r.vmFill(model.body.fill, sm(m), opts);
+    r.vmInk(model.body.ink, sm(m), opts);
 
     if (model.moving) {
       const cyc = CYCLE[pose.id] ?? { travel: 0.04 };
@@ -755,8 +791,8 @@ export class Player {
       const back = this.vm.cycle * cyc.travel;
       const magDrop = pose.reload * (pose.id === 'm4' || pose.id === 'sniper' ? 0.16 : 0.12);
       M4.compose(m2, { x: pose.px, y: pose.py - magDrop, z: pose.pz + back }, pose.ry, pose.rx, pose.rz, s, s, s);
-      if (!inkOnly) r.vmFill(model.moving.fill, m2, opts);
-      r.vmInk(model.moving.ink, m2, opts);
+      if (!inkOnly) r.vmFill(model.moving.fill, sm(m2), opts);
+      r.vmInk(model.moving.ink, sm(m2), opts);
     }
 
     if (inkOnly) return;
@@ -771,16 +807,16 @@ export class Player {
         { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.handRx, pose.rz, s, s, s);
       const gripWorld = applyMat(mHand, pose.hold.grip);
       M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.handRx + 0.35, pose.rz, 1, 1, 1);
-      r.vmFill(hands.hand.fill, local, opts);
-      r.vmInk(hands.hand.ink, local, opts);
-      this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22]);
+      r.vmFill(hands.hand.fill, sm(local), opts);
+      r.vmInk(hands.hand.ink, sm(local), opts);
+      this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22], smear);
 
       if (pose.hold.support && pose.scope < 0.8) {
         const sw = applyMat(mHand, pose.hold.support);
         M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.handRx + 0.5, pose.rz, 1, 1, 1);
-        r.vmFill(hands.hand.fill, local, opts);
-        r.vmInk(hands.hand.ink, local, opts);
-        this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22]);
+        r.vmFill(hands.hand.fill, sm(local), opts);
+        r.vmInk(hands.hand.ink, sm(local), opts);
+        this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22], smear);
       }
     }
 
@@ -789,16 +825,17 @@ export class Player {
       const mz = applyMat(m, MUZZLE[pose.id]);
       const size = (pose.def.id === 'sniper' ? 0.5 : pose.def.id === 'm4' ? 0.34 : 0.30) * (0.85 + this.rng.next() * 0.4);
       M4.compose(this._m3, { x: mz[0], y: mz[1], z: mz[2] }, pose.ry, pose.rx, this.game.animFrame * 1.7, size, size, size);
-      r.vmFill(this.flashMesh.fill, this._m3, opts);
-      r.vmInk(this.flashMesh.ink, this._m3, opts);
+      r.vmFill(this.flashMesh.fill, sm(this._m3), opts);
+      r.vmInk(this.flashMesh.ink, sm(this._m3), opts);
     }
   }
 
-  _drawArm(r, hands, handWorld, shoulder) {
-    const m = M4.create();
+  _drawArm(r, hands, handWorld, shoulder, smear) {
+    const m = this._mArm;
     aimMatrix(m, handWorld, shoulder);
-    r.vmFill(hands.arm.fill, m, { objSeed: 8.1, colorAmt: this.colorAmt });
-    r.vmInk(hands.arm.ink, m, { objSeed: 8.1 });
+    const out = smear ? M4.mul(this._mArm2, smear, m) : m;
+    r.vmFill(hands.arm.fill, out, { objSeed: 8.1, colorAmt: this.colorAmt });
+    r.vmInk(hands.arm.ink, out, { objSeed: 8.1 });
   }
 }
 

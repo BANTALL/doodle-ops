@@ -21,7 +21,8 @@ export const ANIM_HZ = 12;
 const ANIM_DT = 1 / ANIM_HZ;
 const RESPAWN_DELAY = 2.6;
 const BOT_RESPAWN_DELAY = 3.2;
-export const HEART_HEAL = 2;      // a heart is a small top-up, not a medkit
+export const VICTORY_DELAY = 2;   // seconds of free look before the result popup
+export const HEART_HEAL = 5;      // a heart is a top-up, not a medkit
 
 export class Game {
   constructor({ glCanvas, hudCanvas, ui }) {
@@ -87,6 +88,9 @@ export class Game {
     this.rng = new Rng(seed);
     this.killLimit = settings.killLimit;
     this.matchOver = false;
+    this.matchEnding = false;
+    this.matchEndAt = 0;
+    this.aiFrozen = false;
     this.winner = null;
 
     if (this.worldMesh) for (const c of this.worldMesh.chunks) { c.fill.dispose(); c.ink.dispose(); }
@@ -248,6 +252,8 @@ export class Game {
     for (const b of this.bots) {
       if (!b.alive && now >= b.respawnAt) b.respawn(this.pickSpawn(b));
     }
+
+    if (this.matchEnding && !this.matchOver && this.time >= this.matchEndAt) this.endMatch();
 
     if (this.input.hit('Escape')) this.setPaused(true);
     if (this.input.hit('KeyP')) this.setPaused(!this.paused);
@@ -518,20 +524,32 @@ export class Game {
     this.entities.addShards(V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z), 8, 2.2);
 
     const weaponId = killer?.loadout?.id ?? 'pistol';
+    if (victim.isPlayer) this.hud.resetStreak();
     if (killer && killer !== victim) {
       killer.kills++;
       this.hud.addKill(killer.name, victim.name, weaponId, killer.isPlayer);
-      if (killer.isPlayer) { Sfx.kill(); this.toast(`YOU SCRIBBLED OUT ${victim.name}`); }
+      if (killer.isPlayer) { Sfx.kill(); this.hud.bumpStreak(); }
     } else {
       this.hud.addKill('—', victim.name, weaponId, false);
     }
 
     const top = Math.max(...this.actors.map((a) => a.kills));
-    if (top >= this.killLimit) this.endMatch();
+    if (top >= this.killLimit && !this.matchEnding) {
+      // Hold the result for a beat before the popup: the bots stand down but you keep
+      // control, so the moment you won on is yours to look at.
+      this.matchEnding = true;
+      this.aiFrozen = true;
+      this.matchEndAt = this.time + VICTORY_DELAY;
+      const lead = [...this.actors].sort((a, b) => b.kills - a.kills)[0];
+      this.toast(lead.isPlayer ? 'THAT IS THE MATCH' : `${lead.name} TAKES IT`);
+    }
   }
 
   endMatch() {
     this.matchOver = true;
+    this.matchEnding = false;
+    this.aiFrozen = false;
+    this.hud.resetStreak();
     // Set the flag directly rather than through setPaused, which would swap the end
     // screen out for the pause menu. Without this, paused is already false when PLAY
     // AGAIN calls setPaused(false), it early-outs, and the popup never goes away.
@@ -551,15 +569,21 @@ export class Game {
    */
   _impactPost(r) {
     const it = this.impact.t;
-    if (it <= 0) return { impact: 0 };
+    if (it <= 0) return { impact: 0, impactWave: 0 };
     const age = this.impact.dur - it;
     const strength = age < 0.11 ? 1 : 1 - smoothstep(0.11, this.impact.dur, age);
     const s = r.worldToScreen(this.impact.point);
     if (s) this.impact.uv = [s.x / r.width, 1 - s.y / r.height];
+    // The shock ring outruns the hole and keeps going after the black frame has gone.
+    const wt = clamp(age / 0.55, 0, 1);
+    const ease = 1 - (1 - wt) ** 2.2;
     return {
       impact: strength,
       impactUv: this.impact.uv,
       impactR: lerp(0.05, 0.30, clamp(age / 0.16, 0, 1)),
+      impactWave: 1 - smoothstep(0.30, 1.0, wt),
+      impactWaveR: lerp(0.04, 1.25, ease),
+      impactWaveW: 0.030 + ease * 0.075,
     };
   }
 
@@ -587,7 +611,7 @@ export class Game {
       buf[i * 4] = best[i].x;
       buf[i * 4 + 1] = this.map.wallH - 0.10;
       buf[i * 4 + 2] = best[i].z;
-      buf[i * 4 + 3] = 11.0;               // reach
+      buf[i * 4 + 3] = 14.0;               // reach
     }
     r.setLights(buf, n);
   }

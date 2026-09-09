@@ -7,7 +7,7 @@ import { FillBuilder, InkBuilder } from './geom.js';
 import { MAT } from './renderer.js';
 
 export const CELL = 3.6;
-export const WALL_H = 3.15;
+export const WALL_H = 4.35;
 /** Cells per render chunk. Chunks are the unit of frustum and occlusion culling. */
 export const CHUNK = 6;
 

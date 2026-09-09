@@ -23,7 +23,31 @@ export class Hud {
     this.toasts = [];
     this.showScores = false;
     this.visible = true;
+    // Kill streak blot: a drop of ink that falls in, splatters, and carries the count.
+    this.streak = 0;
+    this.blot = { t: 999, seed: 1, drops: [] };
   }
+
+  /** A kill landed. Bumps the streak and re-throws the blot. */
+  bumpStreak() {
+    this.streak++;
+    this.blot.t = 0;
+    this.blot.seed = (this.blot.seed * 1664525 + 1013904223) >>> 0;
+    this.blot.drops = [];
+    const n = 7 + Math.min(6, this.streak);
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI + hash01(this.blot.seed + i * 31, 7) * Math.PI;   // thrown upward and out
+      const sp = 90 + hash01(this.blot.seed + i * 71, 13) * 190;
+      this.blot.drops.push({
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp * 0.75,
+        r: 2.2 + hash01(this.blot.seed + i * 17, 3) * 4.4,
+      });
+    }
+  }
+
+  /** Reset on death, and when a match is decided. */
+  resetStreak() { this.streak = 0; this.blot.t = 999; this.blot.drops = []; }
 
   /** Toggle the overlay layer. Only touches the DOM when the state actually changes. */
   setVisible(v) {
@@ -51,6 +75,7 @@ export class Hud {
   addToast(text) { this.toasts.push({ text, t: 0 }); if (this.toasts.length > 3) this.toasts.shift(); }
 
   update(dt) {
+    this.blot.t += dt;
     for (const a of [this.hitMarkers, this.damageMarks, this.killFeed, this.toasts]) {
       for (let i = a.length - 1; i >= 0; i--) { a[i].t += dt; }
     }
@@ -185,6 +210,7 @@ export class Hud {
 
     this._damageMarks(cx, cy);
     this._hitMarkers(cx, cy);
+    this._killBlot();
     this._speedLines(game);
     this._health(game);
     this._skill(game);
@@ -282,6 +308,97 @@ export class Hud {
       this.line(0, -r - 16, 24, -r, 4, 81, RED);
       g.restore();
     }
+  }
+
+  /**
+   * The streak blot. Falls in from above stretched thin by its own speed, splats flat on
+   * landing and wobbles out of it, and holds the count until the next kill or a death.
+   */
+  _killBlot() {
+    const b = this.blot;
+    if (b.t > 3.3 || this.streak <= 0) return;
+    const t = b.t;
+    const FALL = 0.16, SPLAT = 0.26, HOLD = 2.2;
+
+    const cx = this.w / 2;
+    const restY = this.h - 158;
+    const R = 36 + Math.min(6, this.streak) * 2.6;
+
+    let y = restY, sx = 1, sy = 1, alpha = 1;
+    if (t < FALL) {
+      // Falling: accelerating, and stretched along the fall - the smear does the work of
+      // selling the speed, not a motion-blurred copy of the same shape.
+      const p = t / FALL;
+      y = restY - 210 * (1 - p * p);
+      sy = 1 + 1.15 * (1 - p * 0.35);
+      sx = 1 / Math.sqrt(sy);
+    } else if (t < FALL + SPLAT) {
+      // Landing: squash wide, then wobble back out of it.
+      const q = (t - FALL) / SPLAT;
+      const e = Math.exp(-q * 5.2) * Math.cos(q * 13.0);
+      sx = 1 + 0.52 * e;
+      sy = 1 - 0.40 * e;
+      y = restY + 6 * Math.max(0, e);
+    } else if (t > FALL + SPLAT + HOLD) {
+      alpha = clamp(1 - (t - FALL - SPLAT - HOLD) / 0.6, 0, 1);
+    }
+
+    const g = this.ctx;
+    g.save();
+    g.globalAlpha = alpha;
+
+    // Droplets thrown out on impact, arcing back down under gravity.
+    if (t >= FALL) {
+      const dt2 = t - FALL;
+      for (let i = 0; i < b.drops.length; i++) {
+        const d = b.drops[i];
+        const dx = d.vx * dt2;
+        const dy = d.vy * dt2 + 520 * dt2 * dt2;
+        const fade = clamp(1 - dt2 / 0.75, 0, 1);
+        if (fade <= 0) continue;
+        g.globalAlpha = alpha * fade;
+        g.fillStyle = INK;
+        g.beginPath();
+        g.ellipse(cx + dx, restY + dy, d.r * fade, d.r * fade * 1.25, 0, 0, TAU);
+        g.fill();
+      }
+      g.globalAlpha = alpha;
+    }
+
+    // The blot itself: a ragged blob, re-jittered on the animation clock like everything.
+    g.translate(cx, y);
+    g.scale(sx, sy);
+    g.fillStyle = INK;
+    g.beginPath();
+    const steps = 26;
+    for (let i = 0; i <= steps; i++) {
+      const a = (i / steps) * TAU;
+      const wob = 0.80 + hash01(b.seed + i * 41, 0) * 0.42 + Math.sin(a * 3 + b.seed) * 0.06;
+      const rr = R * wob;
+      const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+
+    // A couple of drips running off the bottom edge.
+    for (let i = 0; i < 3; i++) {
+      const a = 0.6 + hash01(b.seed + i * 97, 1) * 1.9;
+      const len = R * (0.25 + hash01(b.seed + i * 53, 2) * 0.55) * Math.min(1, t * 4);
+      g.beginPath();
+      g.ellipse(Math.cos(a) * R * 0.7, Math.sin(a) * R * 0.7 + len * 0.5, R * 0.11, len * 0.6, 0, 0, TAU);
+      g.fill();
+    }
+
+    // Count, knocked out of the ink.
+    g.scale(1 / sx, 1 / sy);
+    const size = R * 1.05;
+    g.font = `bold ${size}px ${FONT}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = PAPER;
+    g.fillText(`${this.streak}`, 0, size * 0.06);
+    g.restore();
   }
 
   /** Motion lines scribbled in from the edges once you've built up a head of steam. */

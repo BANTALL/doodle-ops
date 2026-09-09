@@ -392,9 +392,22 @@ export class Entities {
     for (const s of this.shards) {
       if (!fr.sphere(s.pos.x, s.pos.y, s.pos.z, s.size)) continue;
       const fade = clamp(s.life / 0.6, 0, 1);
+      if (fade <= 0.15) continue;
       M4.compose(m, s.pos, s.rot[1], s.rot[0], s.rot[2], s.size, s.size * 1.2, s.size);
+      // Shards flung out of a crate are moving fast enough to smear: stretched along their
+      // own velocity and squashed across it, so a fast one isn't the same shape as a
+      // settled one.
+      let mm = m;
+      const sp = Math.hypot(s.vel.x, s.vel.y, s.vel.z);
+      if (sp > 3.2) {
+        const along = 1 + Math.min((sp - 3.2) * 0.14, 1.2);
+        mm = M4.stretchAbout(this._msmear || (this._msmear = M4.create()), m,
+          [s.pos.x, s.pos.y, s.pos.z], [s.vel.x / sp, s.vel.y / sp, s.vel.z / sp],
+          along, 1 / Math.sqrt(along));
+      }
       const opts = { objSeed: s.spin[0] * 3.7 };
-      if (fade > 0.15) { r.fill(this.shardMesh.fill, m, opts); r.ink(this.shardMesh.ink, m, opts); }
+      r.fill(this.shardMesh.fill, mm, opts);
+      r.ink(this.shardMesh.ink, mm, opts);
     }
 
     // Bullet holes.

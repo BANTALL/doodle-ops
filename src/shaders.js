@@ -501,6 +501,9 @@ uniform float uDeath;      // 0..1 desaturate + darken on death
 uniform float uImpact;     // 0..1 sniper impact frame
 uniform vec2  uImpactUv;
 uniform float uImpactR;
+uniform float uImpactWave;   // 0..1 strength of the expanding shock ring
+uniform float uImpactWaveR;  // its radius
+uniform float uImpactWaveW;  // its thickness
 uniform vec3 uPaperColor;
 uniform float uFancy;
 uniform sampler2D uBlur;
@@ -577,12 +580,22 @@ void main(){
     col = mix(col, vec3(g) * 0.75, uDeath);
   }
 
-  // Impact frame. The page goes black except for a hole blown open at the hit, which
-  // reads as a single hand-inked frame spliced into the animation.
-  if (uImpact > 0.001) {
+  // Impact frame. The page goes black except for a hole blown open at the hit, with a
+  // shock ring racing out ahead of it - a single hand-inked frame spliced into the film.
+  if (uImpact > 0.001 || uImpactWave > 0.001) {
     vec2 aspect = vec2(uRes.x / uRes.y, 1.0);
     vec2 rel = (uv - uImpactUv) * aspect;
     float d = length(rel);
+    float wang = atan(rel.y, rel.x);
+    vec2 rdir = d > 1e-5 ? rel / d : vec2(0.0, 0.0);
+
+    // Ragged wavefront, and the picture shoved outward as it passes.
+    float Rw = uImpactWaveR * (1.0 + 0.11 * (vnoise(vec2(wang * 3.0, uSeed * 2.0)) - 0.5));
+    float band = 1.0 - smoothstep(0.0, uImpactWaveW, abs(d - Rw));
+    if (uImpactWave > 0.001 && band > 0.001) {
+      vec2 push = rdir * band * uImpactWave * 0.030 / aspect;
+      col = mix(col, texture(uScene, clamp(uv - push, 0.002, 0.998)).rgb, band * uImpactWave * 0.85);
+    }
     // Ragged rim, redrawn each animation step, so it never looks like a vector circle.
     float ang = atan(rel.y, rel.x);
     float wob = 1.0 + 0.20 * (vnoise(vec2(ang * 2.4, uSeed * 3.1) * 2.0) - 0.5)
@@ -594,6 +607,16 @@ void main(){
     inside = max(inside, (1.0 - smoothstep(R * 1.05, R * 1.75, d)) * spikes);
     vec3 frame = mix(vec3(0.02, 0.02, 0.03), vec3(1.0), inside);
     col = mix(col, frame, uImpact);
+
+    // The ring is painted last so it stays visible over the blacked-out page, and keeps
+    // travelling after the frame itself has faded back to the scene.
+    if (uImpactWave > 0.001) {
+      col = mix(col, vec3(1.0), clamp(band * uImpactWave * 0.95, 0.0, 1.0));
+      // Streaks dragged along behind the front.
+      float streak = smoothstep(0.42, 1.0, vnoise(vec2(wang * 9.0, 3.0)));
+      float trail = (1.0 - smoothstep(Rw * 0.35, Rw, d)) * (d < Rw ? 1.0 : 0.0);
+      col = mix(col, vec3(1.0), trail * streak * uImpactWave * 0.30);
+    }
   }
 
   fragColor = vec4(col, 1.0);

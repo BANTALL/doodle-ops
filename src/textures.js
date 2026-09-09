@@ -313,7 +313,21 @@ export function makePuffTexture(size = 128, seed = 71) {
   return c;
 }
 
-/** Translucent paper shield: a washed panel with a heavy drawn border and cross-hatching. */
+/**
+ * The shield's silhouette, in normalised -1..1 coordinates. Both the translucent panel
+ * texture and the ink outline are generated from this one list, so the fill can't drift
+ * away from the line drawn around it.
+ */
+export const SHIELD_OUTLINE = [
+  [-1.00, 0.74], [-0.62, 0.96], [0.00, 1.00], [0.62, 0.96], [1.00, 0.74],
+  [0.98, 0.06], [0.86, -0.34], [0.52, -0.74], [0.00, -1.00],
+  [-0.52, -0.74], [-0.86, -0.34], [-0.98, 0.06],
+];
+
+/**
+ * Translucent paper shield: a washed panel with cross-hatching, cut to SHIELD_OUTLINE.
+ * The border is deliberately light - the ink pass draws the real outline over the top.
+ */
 export function makeShieldTexture(size = 256, seed = 17) {
   const rng = new Rng(seed);
   const c = document.createElement('canvas');
@@ -321,44 +335,50 @@ export function makeShieldTexture(size = 256, seed = 17) {
   const g = c.getContext('2d');
   g.clearRect(0, 0, size, size);
 
-  // Shield outline: a rounded slab that tapers to a point at the bottom.
+  // Map the shared outline into the texture the way the quad maps uv to the shield's local
+  // plane, with a small inset so the wash sits just inside the ink. Textures are uploaded
+  // without a Y flip, so canvas row 0 is v=0 - which is the *bottom* of the quad. The +y
+  // here is deliberate; getting it wrong stands the shield on its point.
+  const inset = 0.965;
   const path = new Path2D();
-  const w = size * 0.40, top = size * 0.10, bot = size * 0.94;
-  path.moveTo(size / 2 - w, top + size * 0.06);
-  path.quadraticCurveTo(size / 2, top - size * 0.03, size / 2 + w, top + size * 0.06);
-  path.lineTo(size / 2 + w * 0.96, size * 0.58);
-  path.quadraticCurveTo(size / 2 + w * 0.72, size * 0.84, size / 2, bot);
-  path.quadraticCurveTo(size / 2 - w * 0.72, size * 0.84, size / 2 - w * 0.96, size * 0.58);
+  SHIELD_OUTLINE.forEach(([x, y], i) => {
+    const px = (0.5 + x * inset * 0.5) * size;
+    const py = (0.5 + y * inset * 0.5) * size;
+    if (i === 0) path.moveTo(px, py); else path.lineTo(px, py);
+  });
   path.closePath();
 
   g.save();
   g.clip(path);
-  g.fillStyle = 'rgba(255,255,255,0.55)';
+  g.fillStyle = 'rgba(255,255,255,0.62)';
   g.fillRect(0, 0, size, size);
-  // Cross-hatch so it reads as drawn glass rather than a flat alpha rectangle.
-  g.strokeStyle = 'rgba(255,255,255,0.85)';
+
+  // Cross-hatch, so it reads as drawn glass rather than a flat alpha rectangle.
+  g.strokeStyle = 'rgba(255,255,255,0.9)';
   g.lineCap = 'round';
   for (let pass = 0; pass < 2; pass++) {
     const dir = pass === 0 ? 1 : -1;
-    g.lineWidth = size * 0.006;
-    for (let i = -size; i < size * 2; i += size * 0.055) {
+    g.lineWidth = size * 0.007;
+    for (let i = -size; i < size * 2; i += size * 0.06) {
       g.beginPath();
       g.moveTo(i + rng.range(-3, 3), 0);
       g.lineTo(i + dir * size + rng.range(-3, 3), size);
       g.stroke();
     }
   }
+  // A brighter band down the middle, like light catching a sheet held up edge-on.
+  const grad = g.createLinearGradient(size * 0.28, 0, size * 0.72, 0);
+  grad.addColorStop(0, 'rgba(255,255,255,0)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.35)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
   g.restore();
 
-  // Border, drawn twice at slightly different weights like a pen gone round again.
+  // Soft inner edge only; the heavy line comes from the ink pass.
   g.lineJoin = 'round';
-  for (let k = 0; k < 2; k++) {
-    g.lineWidth = size * (k === 0 ? 0.028 : 0.012);
-    g.strokeStyle = k === 0 ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)';
-    g.save();
-    g.translate(rng.range(-2, 2), rng.range(-2, 2));
-    g.stroke(path);
-    g.restore();
-  }
+  g.lineWidth = size * 0.014;
+  g.strokeStyle = 'rgba(255,255,255,0.75)';
+  g.stroke(path);
   return c;
 }
