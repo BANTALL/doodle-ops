@@ -740,24 +740,13 @@ export class Bot {
     }
   }
 
-  /** Stretch matrix for something that moved from `from` to `to` this animation step. */
-  _smearFor(out, model, pivot, from, to, gain, cap) {
-    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
-    const d = Math.hypot(dx, dy, dz);
-    if (d < 0.045) return model;
-    const along = 1 + clamp(d * gain, 0, cap);
-    return M4.stretchAbout(out, model, pivot, [dx / d, dy / d, dz / d], along, 1 / Math.sqrt(along));
-  }
-
   render(r, cam) {
     const m = this._m;
     const seed = this.index * 17.3;
     const tint = { objSeed: seed, colorAmt: this.colorAmt };
     M4.compose(m, this.animPos, this.animYaw, 0, 0, 1, 1, 1);
-    const body = this._smearFor(this._mSmear, m,
-      [this.animPos.x, this.animPos.y + 0.9, this.animPos.z], this.prevAnimPos, this.animPos, 1.5, 0.45);
-    r.fill(this.rig.fill, body, tint);
-    r.ink(this.rig.ink, body, { objSeed: seed });
+    r.fill(this.rig.fill, m, tint);
+    r.ink(this.rig.ink, m, { objSeed: seed });
 
     // Pencil smudge underneath: without it a character reads as pasted onto the page.
     const shadow = M4.create();
@@ -779,11 +768,7 @@ export class Bot {
         this.animPos.y + g[1],
         this.animPos.z - sy * g[0] + cy * g[2]);
       const raw = M4.compose(m, this._tmp, this.animYaw, this.rig.gripPitch, 0, 1, 1, 1);
-      // A knife swing moves the hand a long way in one animation step; the weapon gets
-      // stretched along that arc rather than being drawn twice.
-      const held = this._smearFor(this._mSmear2, raw,
-        [this.gripWorld.x, this.gripWorld.y, this.gripWorld.z],
-        this.prevGripWorld, this.gripWorld, 2.2, 1.3);
+      const held = raw;
       const wOpts = { objSeed: seed + 3, colorAmt: this.colorAmt };
       r.fill(model.body.fill, held, wOpts);
       r.ink(model.body.ink, held, { objSeed: seed + 3 });

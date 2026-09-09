@@ -4,6 +4,7 @@
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT, BODY_RADIUS } from './combat.js';
 import { WEAPONS, HOLD, ADS, MUZZLE, CYCLE } from './weapons.js';
+import { SWING_FRAME_COUNT, SWING_FPS, SWING_PLANE_Z } from './swingframes.js';
 import { M4, V, Rng, clamp, lerp, damp, smoothstep, dirFrom, DEG, TAU } from './math.js';
 import { settings } from './settings.js';
 import { getDoodler } from './doodlers.js';
@@ -397,9 +398,14 @@ export class Player {
       if (def.kind === 'gun' && lo.ammo <= 0 && lo.reloadT <= 0 && !lo.drawT) {
         if (lo.reserve > 0) { if (lo.startReload()) Sfx.reload('out'); }
         else if (input.buttonPressed[0]) Sfx.uiClick();
-      } else if (lo.tryFire(now)) {
-        if (def.kind === 'melee') { Sfx.swing(); this.vm.kick = 1; this.vm.lastFrameFired = game.animFrame; }
-        else this._fireGun(def);
+      } else {
+        // Capture the scope state before firing: cycling the bolt drops the scope, and a
+        // shot taken through the glass is a guaranteed kill.
+        const scoped = def.scope && lo.scopeT > 0.9;
+        if (lo.tryFire(now)) {
+          if (def.kind === 'melee') { Sfx.swing(); this.vm.kick = 1; this.vm.lastFrameFired = game.animFrame; }
+          else this._fireGun(def, scoped);
+        }
       }
     }
   }
@@ -453,7 +459,7 @@ export class Player {
     return false;
   }
 
-  _fireGun(def) {
+  _fireGun(def, scoped = false) {
     const game = this.game;
     const eye = this.eye;
     const dir = this.aimDir(this._dir);
@@ -462,6 +468,9 @@ export class Player {
     const shotDir = spreadDir(dir, spread, this.rng, V.make());
 
     const hit = resolveShot(game.world, this, eye, shotDir, def, this._hit);
+    // A scoped sniper round that finds a body kills outright, wherever it lands. Bots
+    // never scope - they have no scope input - so this is the player's alone.
+    if (scoped && hit.kind === 'actor') hit.damage = 9999;
     game.registerShot(this, eye, shotDir, hit, def);
 
     // Recoil: up, plus a sideways nudge that alternates so sprays snake.
@@ -732,36 +741,27 @@ export class Player {
     const main = this._vmPose(lag, scratch[0]);
     if (!this.game.weapons.models[main.id]) return;
 
-    // ---- smear -----------------------------------------------------------
-    // A real smear frame deforms the thing: the weapon is stretched along the direction
-    // it actually travelled since the last animation step and squashed across it, so its
-    // silhouette for this frame is not its resting silhouette. Drawing the same shape
-    // twice is a double exposure, not a smear.
-    const prev = this._vmPose(lag + 1 / 12, scratch[3]);
-    const ref = MUZZLE[main.id] ?? [0, 0, -0.30];
-    const pA = applyMat(this._poseMatrix(main, this._mA), ref);
-    const pB = applyMat(this._poseMatrix(prev, this._mB), ref);
-    const dx = pA[0] - pB[0], dy = pA[1] - pB[1], dz = pA[2] - pB[2];
-    const travel = Math.hypot(dx, dy, dz);
-
-    let S = null;
-    if (travel > 0.020) {
-      const dir = [dx / travel, dy / travel, dz / travel];
-      const along = 1 + clamp(travel * 2.6, 0, 1.5);
-      // Squash across the direction of travel, so it stretches rather than just inflating.
-      const perp = 1 / Math.sqrt(along);
-      S = M4.stretchAbout(this._mS, this._identity, [main.px, main.py, main.pz], dir, along, perp);
-
-      // One trailing ghost, stretched harder still - a second shape, not a second copy.
-      const ghostAlong = 1 + clamp(travel * 4.2, 0, 2.4);
-      const G = M4.stretchAbout(this._mG, this._identity,
-        [lerp(prev.px, main.px, 0.45), lerp(prev.py, main.py, 0.45), lerp(prev.pz, main.pz, 0.45)],
-        dir, ghostAlong, 1 / Math.sqrt(ghostAlong));
-      const mid = this._vmPose(lag + (1 / 12) * 0.5, scratch[1]);
-      if (this.game.weapons.models[mid.id]) this._drawWeapon(r, mid, 0.30, true, G);
+    // ---- drawn swing -----------------------------------------------------
+    // While the knife is swinging, the viewmodel *is* the animation: twelve authored
+    // frames, one per animation step, each a different outline. No 3D knife, no hands -
+    // it's a cel, the way a 2D game would do it.
+    if (lo.def.kind === 'melee' && lo.meleeT >= 0) {
+      const t = Math.max(0, lo.meleeT - lag);
+      const idx = clamp(Math.floor(t * SWING_FPS), 0, SWING_FRAME_COUNT - 1);
+      const frame = this.game.swingFrames?.[idx];
+      if (frame) {
+        const vm = this.vm;
+        M4.compose(this._m,
+          { x: vm.swayX * 0.5, y: vm.swayY * 0.5 + vm.jumpOff * 0.5, z: SWING_PLANE_Z },
+          0, 0, 0, 1, 1, 1);
+        const opts = { objSeed: 4.1 + idx * 3.7, colorAmt: this.colorAmt };
+        r.vmFill(frame.fill, this._m, opts);
+        r.vmInk(frame.ink, this._m, opts);
+        return;
+      }
     }
 
-    this._drawWeapon(r, main, 1, false, S);
+    this._drawWeapon(r, main, 1, false, null);
   }
 
   /** Model matrix for a pose, without any smear applied. */

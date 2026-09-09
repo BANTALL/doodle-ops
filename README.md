@@ -37,7 +37,7 @@ You carry the knife plus **one** gun. Picking a new gun up drops the one in your
 | **Knife** | 42 | fast | — | long reach, 1.6× from behind, and you move quicker holding it |
 | **Pistol** | 26 | slow | 12 | the reliable middle |
 | **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
-| **Sniper** | 88 | very slow | 1 | hold right mouse to scope; two body shots or one head |
+| **Sniper** | 88 | very slow | 1 | hold right mouse to scope — **a scoped shot that connects kills outright** |
 
 Crates are scattered through the level. Break one — shoot it or knife it — and it coughs up
 a random gun, plus a heart 75% of the time (worth 5 HP, walked over rather than prompted
@@ -61,6 +61,9 @@ oriented box *before* bodies, so anyone behind it is covered for free. Your own 
 straight through, because a shield you can't fire past is a punishment rather than a skill.
 `Q` only patches it once it's under 10 — a healthy one refuses, a broken one is replaced, a
 damaged one goes back to 50 — on a 55 second cooldown.
+
+A scoped sniper round that finds a body kills whatever it hits, wherever it lands. Bots
+have no scope input, so it is the player's alone.
 
 The **mechanist's** turrets carry 100 rounds at 2 damage on an M4 cadence and vanish after
 a minute or when empty. Their shots are attributed to whoever placed them, so a turret
@@ -144,15 +147,18 @@ animation, and here it falls out of the update schedule rather than being faked.
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
 
-**Smear frames.** A smear frame deforms the thing. The viewmodel pose is a pure function
-of the weapon timers, so the pose from one animation step ago can be asked for, a reference
-point on the weapon tracked between the two, and the whole model stretched along the
-direction it actually travelled and squashed across it — hands, sleeves and muzzle flash
-through the same matrix, so nothing detaches. Its silhouette for that frame genuinely is
-not its resting silhouette, which is the entire point: drawing the same shape twice is a
-double exposure. One trailing ghost survives, stretched harder still, so it reads as a
-second *shape* rather than a second copy. Paper shards stretch along their velocity, and a
-bot's weapon stretches along the arc its hand swept since the last step.
+**Smear frames are drawn, not stretched.** A knife swing is twelve authored frames played
+one per animation step. Frame 5 is not frame 4 scaled — it's a different outline: the blade
+loses its taper, grows a row of uneven teeth along its trailing edge, runs off the side of
+the view and stops being a knife for three frames before reassembling on the other side.
+Stretching one mesh can't do that; it always reads as the same object through a bad lens.
+While the swing plays, the viewmodel *is* the animation — no 3D knife, no hands, just the
+cel, the way a 2D game would do it. The swing runs a full second (twelve frames at twelve
+frames a second) while the attack cadence is half that, so holding attack interrupts it
+partway and a single swing shows you the whole thing.
+
+Paper shards keep a velocity stretch, since a tumbling scrap has no rest shape to distort
+away from.
 
 **The whole viewmodel is sampled at the last animation step**, not at the current
 instant — otherwise the weapon in your hands is the one thing on screen not moving on
@@ -175,9 +181,12 @@ it — the picture is shoved outward as the wavefront passes, and the ring keeps
 over the scene after the black frame has faded back. Real-time driven, so it lasts 0.65s at
 any frame rate.
 
-**Kill streak.** A drop of ink falls in from above — stretched thin by its own speed on the
-way down — splatters flat, wobbles out of it, and holds your streak count knocked out of
-the ink. It resets when you die and when the match is decided.
+**Kill streak.** Twelve drawn frames at twelve frames a second. A drop falls, lengthening
+as it goes; the last frame before it lands is a different drawing entirely — a long
+speeding streak shedding flecks — then three splat frames with spikes thrown out at angles
+that change frame to frame, then it settles into a blot holding your count knocked out of
+the ink. A teardrop, a streak and a splat are different paths, not one shape resized. It
+resets when you die and when the match is decided.
 
 **Culling.** The level is built as chunks of 6×6 cells, each with its own meshes and
 bounding box, because a single map-sized mesh can only ever be drawn whole. Frustum culling
@@ -263,6 +272,7 @@ src/
   audio.js      procedural WebAudio SFX
   input.js      pointer lock, keys, mouse
   settings.js   persisted settings
+  swingframes.js the twelve drawn frames of a knife swing
   frustum.js    view frustum planes for culling
   math.js       vectors, matrices, RNG
 ```

@@ -30,6 +30,7 @@ export class Loadout {
     this.wantAuto = false;
     this.swapFrom = null;             // weapon we're spinning away from, during a draw
     this.slashDir = 1;                // knife swings alternate sides
+    this.meleeT = -1;                 // seconds into the drawn swing animation, -1 = idle
   }
 
   get id() { return this.slot === 'melee' ? KNIFE : this.gun; }
@@ -94,6 +95,10 @@ export class Loadout {
         this.reserve -= take;
       }
     }
+    if (this.meleeT >= 0) {
+      this.meleeT += dt;
+      if (this.meleeT >= (this.def.swingDuration ?? 1)) this.meleeT = -1;
+    }
     this.bloom = Math.max(0, this.bloom - dt * 3.2);
     // approach(), not a signed step: stepping by +/-rate every frame makes the blend
     // jitter around the target instead of settling on it.
@@ -111,6 +116,7 @@ export class Loadout {
       this.pendingMelee = def.hitDelay;
       this.lastFire = now;
       this.slashDir = -this.slashDir;   // alternate the swing side
+      this.meleeT = 0;                  // restart the drawn animation
       return true;
     }
     if (this.ammo <= 0) return false;

@@ -11,6 +11,26 @@ const RED = '#c0392f';
 const PAPER = '#f5f2e9';
 export const FONT = '"Comic Sans MS", "Chalkboard SE", "Segoe Print", "Bradley Hand", cursive';
 
+/**
+ * Twelve frames of the kill blot. y is in units of the blot radius; the drop frames use
+ * r/len (belly radius and point length), the splat frames use rx/ry/spikes/amp/phase.
+ */
+const BLOT_FRAMES = [
+  { kind: 'drop',  y: -5.60, r: 0.30, len: 0.62 },
+  { kind: 'drop',  y: -3.90, r: 0.32, len: 0.85 },
+  { kind: 'drop',  y: -2.20, r: 0.33, len: 1.25 },
+  // The last frame before it lands is a different drawing: a streak, not a drop.
+  { kind: 'speed', y: -0.85, r: 0.28, len: 2.60 },
+  { kind: 'splat', y:  0.16, rx: 1.62, ry: 0.40, spikes: 9,  amp: 0.34, phase: 0.0, drops: 1.00 },
+  { kind: 'splat', y:  0.08, rx: 1.80, ry: 0.32, spikes: 12, amp: 0.44, phase: 1.9, drops: 1.25 },
+  { kind: 'splat', y:  0.02, rx: 1.38, ry: 0.60, spikes: 7,  amp: 0.26, phase: 3.4, drops: 0.85 },
+  { kind: 'blob',  y: -0.16, rx: 0.86, ry: 1.20, spikes: 5,  amp: 0.17, phase: 0.8, drops: 0.35 },
+  { kind: 'blob',  y:  0.04, rx: 1.14, ry: 0.90, spikes: 4,  amp: 0.13, phase: 2.6, drops: 0 },
+  { kind: 'blob',  y: -0.02, rx: 0.96, ry: 1.05, spikes: 4,  amp: 0.10, phase: 4.1, drops: 0 },
+  { kind: 'blob',  y:  0.01, rx: 1.03, ry: 0.98, spikes: 3,  amp: 0.08, phase: 5.5, drops: 0 },
+  { kind: 'blob',  y:  0.00, rx: 1.00, ry: 1.00, spikes: 3,  amp: 0.07, phase: 0.4, drops: 0 },
+];
+
 export class Hud {
   constructor(canvas) {
     this.canvas = canvas;
@@ -25,7 +45,7 @@ export class Hud {
     this.visible = true;
     // Kill streak blot: a drop of ink that falls in, splatters, and carries the count.
     this.streak = 0;
-    this.blot = { t: 999, seed: 1, drops: [] };
+    this.blot = { t: 999, seed: 1 };
   }
 
   /** A kill landed. Bumps the streak and re-throws the blot. */
@@ -33,21 +53,10 @@ export class Hud {
     this.streak++;
     this.blot.t = 0;
     this.blot.seed = (this.blot.seed * 1664525 + 1013904223) >>> 0;
-    this.blot.drops = [];
-    const n = 7 + Math.min(6, this.streak);
-    for (let i = 0; i < n; i++) {
-      const a = -Math.PI + hash01(this.blot.seed + i * 31, 7) * Math.PI;   // thrown upward and out
-      const sp = 90 + hash01(this.blot.seed + i * 71, 13) * 190;
-      this.blot.drops.push({
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp * 0.75,
-        r: 2.2 + hash01(this.blot.seed + i * 17, 3) * 4.4,
-      });
-    }
   }
 
   /** Reset on death, and when a match is decided. */
-  resetStreak() { this.streak = 0; this.blot.t = 999; this.blot.drops = []; }
+  resetStreak() { this.streak = 0; this.blot.t = 999; }
 
   /** Toggle the overlay layer. Only touches the DOM when the state actually changes. */
   setVisible(v) {
@@ -311,93 +320,93 @@ export class Hud {
   }
 
   /**
-   * The streak blot. Falls in from above stretched thin by its own speed, splats flat on
-   * landing and wobbles out of it, and holds the count until the next kill or a death.
+   * The streak blot, as twelve drawn frames at 12fps.
+   *
+   * Frames 0-2 are a falling drop, frame 3 is a different drawing entirely - a long
+   * speeding streak - and frames 4-6 are splats with spikes thrown out at angles that
+   * change from frame to frame. None of them is another frame scaled up: a teardrop, a
+   * streak and a splat are different paths, which is the whole point of a smear frame.
    */
   _killBlot() {
     const b = this.blot;
-    if (b.t > 3.3 || this.streak <= 0) return;
-    const t = b.t;
-    const FALL = 0.16, SPLAT = 0.26, HOLD = 2.2;
+    if (this.streak <= 0 || b.t > 3.6) return;
 
+    const idx = Math.min(BLOT_FRAMES.length - 1, Math.floor(b.t * 12));
+    const f = BLOT_FRAMES[idx];
     const cx = this.w / 2;
     const restY = this.h - 158;
     const R = 36 + Math.min(6, this.streak) * 2.6;
 
-    let y = restY, sx = 1, sy = 1, alpha = 1;
-    if (t < FALL) {
-      // Falling: accelerating, and stretched along the fall - the smear does the work of
-      // selling the speed, not a motion-blurred copy of the same shape.
-      const p = t / FALL;
-      y = restY - 210 * (1 - p * p);
-      sy = 1 + 1.15 * (1 - p * 0.35);
-      sx = 1 / Math.sqrt(sy);
-    } else if (t < FALL + SPLAT) {
-      // Landing: squash wide, then wobble back out of it.
-      const q = (t - FALL) / SPLAT;
-      const e = Math.exp(-q * 5.2) * Math.cos(q * 13.0);
-      sx = 1 + 0.52 * e;
-      sy = 1 - 0.40 * e;
-      y = restY + 6 * Math.max(0, e);
-    } else if (t > FALL + SPLAT + HOLD) {
-      alpha = clamp(1 - (t - FALL - SPLAT - HOLD) / 0.6, 0, 1);
-    }
+    // Hold the last frame, then fade the whole thing off the page.
+    const holdT = b.t - (BLOT_FRAMES.length - 1) / 12;
+    const alpha = holdT > 2.0 ? clamp(1 - (holdT - 2.0) / 0.6, 0, 1) : 1;
+    if (alpha <= 0) return;
 
     const g = this.ctx;
     g.save();
     g.globalAlpha = alpha;
-
-    // Droplets thrown out on impact, arcing back down under gravity.
-    if (t >= FALL) {
-      const dt2 = t - FALL;
-      for (let i = 0; i < b.drops.length; i++) {
-        const d = b.drops[i];
-        const dx = d.vx * dt2;
-        const dy = d.vy * dt2 + 520 * dt2 * dt2;
-        const fade = clamp(1 - dt2 / 0.75, 0, 1);
-        if (fade <= 0) continue;
-        g.globalAlpha = alpha * fade;
-        g.fillStyle = INK;
-        g.beginPath();
-        g.ellipse(cx + dx, restY + dy, d.r * fade, d.r * fade * 1.25, 0, 0, TAU);
-        g.fill();
-      }
-      g.globalAlpha = alpha;
-    }
-
-    // The blot itself: a ragged blob, re-jittered on the animation clock like everything.
-    g.translate(cx, y);
-    g.scale(sx, sy);
     g.fillStyle = INK;
-    g.beginPath();
-    const steps = 26;
-    for (let i = 0; i <= steps; i++) {
-      const a = (i / steps) * TAU;
-      const wob = 0.80 + hash01(b.seed + i * 41, 0) * 0.42 + Math.sin(a * 3 + b.seed) * 0.06;
-      const rr = R * wob;
-      const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
-      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
-    }
-    g.closePath();
-    g.fill();
+    g.translate(cx, restY + f.y * (R / 36));
 
-    // A couple of drips running off the bottom edge.
-    for (let i = 0; i < 3; i++) {
-      const a = 0.6 + hash01(b.seed + i * 97, 1) * 1.9;
-      const len = R * (0.25 + hash01(b.seed + i * 53, 2) * 0.55) * Math.min(1, t * 4);
+    if (f.kind === 'drop' || f.kind === 'speed') {
+      // Teardrop: a round belly with a point trailing above it. The speeding frame is the
+      // same construction pulled into a streak, with flecks shedding off the top.
+      const r = R * f.r, len = R * f.len;
       g.beginPath();
-      g.ellipse(Math.cos(a) * R * 0.7, Math.sin(a) * R * 0.7 + len * 0.5, R * 0.11, len * 0.6, 0, 0, TAU);
+      g.moveTo(0, -len);
+      g.quadraticCurveTo(r * 0.9, -len * 0.42, r, 0);
+      g.arc(0, 0, r, 0, Math.PI);
+      g.quadraticCurveTo(-r * 0.9, -len * 0.42, 0, -len);
+      g.closePath();
       g.fill();
+      if (f.kind === 'speed') {
+        for (let i = 0; i < 3; i++) {
+          const off = (hash01(b.seed + i * 29, 5) - 0.5) * r * 1.5;
+          const l = len * (0.30 + hash01(b.seed + i * 61, 6) * 0.55);
+          g.beginPath();
+          g.ellipse(off, -len - l * 0.5, r * 0.14, l * 0.5, 0, 0, TAU);
+          g.fill();
+        }
+      }
+    } else {
+      // Splat and settled blob: an irregular ring whose spike count, amplitude and phase
+      // are authored per frame, so consecutive frames are different outlines.
+      g.beginPath();
+      const steps = 40;
+      for (let i = 0; i <= steps; i++) {
+        const a = (i / steps) * TAU;
+        const wob = 1 + f.amp * Math.sin(a * f.spikes + f.phase)
+                      + 0.10 * (hash01(b.seed + i * 13, idx) - 0.5);
+        const rad = R * wob;
+        const px = Math.cos(a) * rad * f.rx;
+        const py = Math.sin(a) * rad * f.ry;
+        if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      }
+      g.closePath();
+      g.fill();
+
+      // Flecks thrown clear on the impact frames.
+      if (f.drops > 0) {
+        for (let i = 0; i < 9; i++) {
+          const a = hash01(b.seed + i * 37, idx) * TAU;
+          const dist = R * (1.25 + hash01(b.seed + i * 53, idx) * 1.5) * f.drops;
+          const rr = R * (0.05 + hash01(b.seed + i * 91, idx) * 0.10);
+          g.beginPath();
+          g.ellipse(Math.cos(a) * dist * f.rx, Math.sin(a) * dist * 0.7, rr, rr * 1.2, 0, 0, TAU);
+          g.fill();
+        }
+      }
     }
 
-    // Count, knocked out of the ink.
-    g.scale(1 / sx, 1 / sy);
-    const size = R * 1.05;
-    g.font = `bold ${size}px ${FONT}`;
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillStyle = PAPER;
-    g.fillText(`${this.streak}`, 0, size * 0.06);
+    // Count appears once it has actually landed.
+    if (f.kind === 'splat' || f.kind === 'blob') {
+      const size = R * 1.05;
+      g.font = `bold ${size}px ${FONT}`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = PAPER;
+      g.fillText(`${this.streak}`, 0, size * 0.06);
+    }
     g.restore();
   }
 

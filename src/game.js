@@ -9,6 +9,7 @@ import { Bot } from './bots.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { buildWeaponModels, WEAPONS, randomGunId } from './weapons.js';
+import { buildSwingFrames } from './swingframes.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
 import { Shield, Turret, buildSkillMeshes } from './skills.js';
@@ -34,6 +35,7 @@ export class Game {
 
     this.weapons = buildWeaponModels(this.gl);
     this.skillMeshes = buildSkillMeshes(this.gl);
+    this.swingFrames = buildSwingFrames(this.gl);
     this.botNames = [...BOT_NAMES];
 
     this.time = 0;
