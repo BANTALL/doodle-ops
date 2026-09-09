@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="description" content="Launcher DOODLE OPS: kontrol layar sentuh dan mod sisi-klien untuk game FPS kertas.">
+<meta name="theme-color" content="#f5f2e9">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>DOODLE OPS — Launcher</title>
+<link rel="stylesheet" href="./launcher.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎮</text></svg>">
+</head>
+<body>
+
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <filter id="wobble">
+    <feTurbulence type="fractalNoise" baseFrequency="0.019" numOctaves="3" seed="7" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="4.5" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<!-- ============================================================== HOME -->
+<section class="screen" data-screen="home">
+  <div class="sheet">
+    <h1 class="title">DOODLE<span class="title-ops">OPS</span></h1>
+    <p class="subtitle">launcher · kontrol sentuh · mod sisi-klien</p>
+
+    <div class="menu">
+      <button class="big-button" data-go="play">MAIN</button>
+      <button class="big-button ghost" data-go="mods">MOD <span class="pill" id="mod-count">0</span></button>
+      <button class="big-button ghost small" data-go="about">TENTANG &amp; SINKRON</button>
+    </div>
+
+    <p class="status" id="home-status">menyiapkan…</p>
+  </div>
+</section>
+
+<!-- ============================================================== MODS -->
+<section class="screen hidden" data-screen="mods">
+  <div class="sheet sheet-wide">
+    <div class="bar">
+      <button class="chip" data-go="home">‹ KEMBALI</button>
+      <h2 class="title small">MOD</h2>
+      <button class="chip" id="btn-template">CONTOH .ZIP</button>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <p><strong>Taruh file .zip di sini</strong></p>
+      <p class="note">atau</p>
+      <button class="big-button small" id="btn-pick">PILIH FILE MOD</button>
+      <input type="file" id="file-input" accept=".zip,application/zip" multiple hidden>
+      <p class="note">Isi zip mengikuti struktur repo. Contoh: taruh <code>src/player.js</code>
+        di dalam zip, dan file itulah yang dimuat game, bukan yang di GitHub.</p>
+    </div>
+
+    <p class="msg" id="mod-msg"></p>
+
+    <div class="order-note note">
+      Urutan = prioritas. Kalau dua mod menyentuh file yang sama, <strong>yang paling bawah menang</strong>.
+    </div>
+
+    <div id="mod-list" class="mod-list"></div>
+
+    <div class="button-row">
+      <button class="big-button ghost small" id="btn-restore">PULIHKAN MOD BAWAAN</button>
+      <button class="big-button ghost small" id="btn-all-on">NYALAKAN SEMUA</button>
+      <button class="big-button ghost small" id="btn-all-off">MATIKAN SEMUA</button>
+    </div>
+    <p class="note" id="storage-note"></p>
+  </div>
+</section>
+
+<!-- ============================================================= ABOUT -->
+<section class="screen hidden" data-screen="about">
+  <div class="sheet sheet-wide">
+    <div class="bar">
+      <button class="chip" data-go="home">‹ KEMBALI</button>
+      <h2 class="title small">TENTANG &amp; SINKRON</h2>
+      <span></span>
+    </div>
+
+    <div class="about-body">
+      <h3>Kenapa update dari upstream tidak akan bentrok</h3>
+      <p class="note">
+        Launcher ini <strong>tidak mengubah satu pun file game</strong>. Semua yang baru ada di
+        <code>/launcher/</code> dan <code>/sw.js</code>. Kontrol sentuh disuntikkan ke halaman
+        game saat dimuat oleh service worker, bukan ditulis ke <code>index.html</code>.
+        Karena itu <code>git merge upstream/main</code> tidak pernah menyentuh file yang sama,
+        dan workflow sinkron otomatis bisa jalan tanpa perlu diurus.
+      </p>
+
+      <h3>Kontrol sentuh itu mod biasa, bukan bagian launcher</h3>
+      <p class="note">
+        Tidak ada satu baris pun kode kontrol sentuh di dalam launcher. Ia mod utuh di
+        <code>mods/mobile-controls/</code> dengan <code>mod.json</code>-nya sendiri, dan saat
+        pertama dibuka launcher <em>mengezipnya di memori lalu memasangnya lewat installMod()
+        yang sama persis</em> dengan zip buatanmu. Setelah itu ia baris biasa di database:
+        bisa dimatikan, diurutkan, ditimpa mod lain, bahkan dihapus.
+      </p>
+      <p class="note">
+        Yang launcher tahu cuma satu hal: folder mana yang berisi mod bawaan. Nama, versi,
+        daftar file, dan skripnya semua dibaca dari <code>mod.json</code> milik mod itu.
+        Tidak ada cabang kode "kalau ini mod bawaan" di mana pun — dan itu disengaja, karena
+        setiap cabang seperti itu adalah tempat bug bersembunyi.
+      </p>
+      <p class="note">
+        Pengaturan tombolnya ada di dalam game, bukan di sini: tombol
+        <strong>KONTROL SENTUH</strong> di layar awal dan di menu jeda. Tombol itu ikut hilang
+        kalau modnya dimatikan. Bawaannya tombol layar hanya muncul kalau ada layar sentuh —
+        di browser desktop, setel <em>selalu nyala</em> di panel itu.
+      </p>
+
+      <h3>Cara kerja mod</h3>
+      <p class="note">
+        Service worker memotong setiap permintaan file game. Kalau ada mod aktif yang punya file
+        di path itu, isinya diambil dari IndexedDB. Tidak ada daftar file yang boleh dimod —
+        path apa pun yang kamu taruh di zip, itulah yang dipakai. File asli di repo tidak pernah
+        berubah; matikan mod, semuanya kembali seperti semula.
+      </p>
+      <p class="note">
+        <strong>Mod tidak cuma mengganti — ia juga bisa menambah file.</strong> Path yang belum ada
+        di repo tetap dilayani, jadi mod boleh membawa modul JS baru, tekstur baru, audio baru,
+        atau data apa pun, lalu memanggilnya dari skripnya sendiri atau dari file yang ia ganti.
+        Di daftar file tiap mod, yang menambah ditandai <em>baru</em> dan yang menimpa ditandai
+        <em>ganti</em>.
+      </p>
+
+      <h3>Format mod</h3>
+      <pre class="code">mod-saya.zip
+├── mod.json
+├── src/player.js          ← ganti logic pemain
+├── src/weapons.js         ← ganti statistik senjata
+├── styles.css             ← ganti tampilan menu
+└── assets/audio/pistol-shot.mp3</pre>
+      <pre class="code">{
+  "name": "Mod Saya",
+  "version": "1.0.0",
+  "author": "kamu",
+  "description": "Apa yang mod ini lakukan.",
+  "scripts": ["mods/init.js"]
+}</pre>
+      <p class="note">
+        <code>scripts</code> opsional: file di daftar itu dijalankan sebagai modul setelah game
+        siap, dengan <code>window.DoodleMods</code> dan <code>window.__game</code> tersedia.
+        Berguna untuk tweak kecil tanpa menyalin seluruh file.
+      </p>
+
+      <h3>Status</h3>
+      <dl class="kv" id="about-status"></dl>
+
+      <div class="button-row">
+        <button class="big-button ghost small" id="btn-update-sw">PERBARUI LAUNCHER</button>
+        <button class="big-button ghost small" id="btn-open-raw">BUKA GAME TANPA LAUNCHER</button>
+        <button class="big-button ghost small danger" id="btn-wipe">HAPUS SEMUA MOD</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== PLAY -->
+<div class="play hidden" data-screen="play">
+  <!-- pointer-lock has to be granted explicitly, or mouse look is dead in the
+       frame the moment the touch controls are switched off. -->
+  <iframe id="game-frame" title="DOODLE OPS"
+          allow="fullscreen; autoplay; gamepad; pointer-lock; screen-wake-lock; accelerometer; gyroscope"></iframe>
+  <button class="back-chip" id="btn-back">‹ LAUNCHER</button>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

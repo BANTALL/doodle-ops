@@ -1,0 +1,294 @@
+/* Touch controls, laid out the way a shooter on a phone actually is: joystick
+   under the left thumb, a fanned arc of actions under the right one, weapon
+   slots up the right edge, menu buttons in the top corner.
+
+   The game is drawn on white paper, so the buttons are dark translucent discs
+   with a bright rim and a real drop shadow - that is what keeps them readable
+   against a blown-out wall, and readable is the whole job. */
+
+#dops-touch {
+  position: fixed;
+  inset: 0;
+  z-index: 3;                 /* above #hud (1), below the menu overlay (2)... */
+  pointer-events: none;       /* ...but only the children below take input */
+  font-family: var(--font, "Comic Sans MS", "Segoe Print", cursive);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+
+  --dops-op: 0.8;
+  --dops-scale: 1;
+  --dops-stick: 1;
+
+  /* One unit drives the whole right-hand cluster, so the layout keeps its
+     proportions from a small phone in landscape up to a tablet. */
+  --u: calc(clamp(0.72px, 0.245vh, 1.12px) * var(--dops-scale));
+
+  /* The game is nearly white, so the controls have to be dark and hard-edged.
+     A soft outer shadow plus a dark inner ring keeps the bright rim readable
+     even against a blown-out wall. */
+  --face: rgba(20, 18, 26, 0.62);
+  --face-on: rgba(244, 241, 233, 0.96);
+  --rim: rgba(255, 255, 255, 0.96);
+  --glyph: #ffffff;
+  --shadow:
+    0 calc(3px * var(--dops-scale)) calc(12px * var(--dops-scale)) rgba(0, 0, 0, 0.55),
+    0 calc(1px * var(--dops-scale)) calc(3px * var(--dops-scale)) rgba(0, 0, 0, 0.45),
+    inset 0 0 0 calc(2px * var(--dops-scale)) rgba(0, 0, 0, 0.35);
+}
+
+#dops-touch[hidden] { display: none !important; }
+
+/* The single most important line in this file. Without `touch-action: none` on
+   every interactive part, the browser steals the second finger for scrolling or
+   pinch-zoom and the classic "button A is down so button B does nothing" bug
+   shows up. */
+#dops-touch * { touch-action: none; }
+
+/* ------------------------------------------------------------------ look zone */
+
+/* Full-screen, first in the DOM so every real control stacks on top of it. Drag
+   to move the camera, tap to shoot. */
+.dops-look {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ joystick */
+
+/* Invisible hit area. In fixed mode JS parks it exactly over the visible ring;
+   in floating mode it stretches across the left half so the stick can spring up
+   wherever the thumb lands. It sits above .dops-look so a thumb there is never
+   read as a look-drag. */
+.dops-zone {
+  position: absolute;
+  pointer-events: auto;
+  background: transparent;
+}
+.dops-zone.wide {
+  left: 0 !important;
+  top: auto !important;
+  bottom: 0 !important;
+  width: 46% !important;
+  height: 80% !important;
+}
+#dops-touch.mirrored .dops-zone.wide { left: auto !important; right: 0; }
+
+.dops-stick {
+  position: absolute;
+  left: calc(26px + env(safe-area-inset-left, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  width: calc(158px * var(--dops-stick) * var(--dops-scale));
+  height: calc(158px * var(--dops-stick) * var(--dops-scale));
+  border-radius: 50%;
+  pointer-events: none;       /* .dops-zone takes the input; this is the drawing */
+  opacity: var(--dops-op);
+  border: 3px solid var(--rim);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(24, 22, 31, 0.10) 44%, rgba(24, 22, 31, 0.4) 100%);
+  box-shadow: var(--shadow);
+  transition: opacity 130ms ease;
+}
+.dops-stick.floating { opacity: 0; }
+.dops-stick.floating.live { opacity: var(--dops-op); }
+
+/* A faint inner ring marks the dead zone, so it is obvious where the stick
+   starts registering. */
+.dops-stick::before {
+  content: "";
+  position: absolute;
+  inset: 33%;
+  border: 2px dashed rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+}
+
+.dops-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 38%;
+  height: 38%;
+  margin: -19% 0 0 -19%;
+  border-radius: 50%;
+  border: 3px solid var(--rim);
+  background: rgba(240, 236, 226, 0.72);
+  box-shadow: var(--shadow);
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------------- buttons */
+
+.dops-btn {
+  position: absolute;
+  pointer-events: auto;
+  display: grid;
+  place-content: center;
+  gap: 1px;
+  border: 3px solid var(--rim);
+  border-radius: 50%;
+  background: var(--face);
+  box-shadow: var(--shadow);
+  opacity: var(--dops-op);
+  font: inherit;
+  font-weight: 700;
+  font-size: calc(13px * var(--dops-scale));
+  letter-spacing: 0.4px;
+  line-height: 1.05;
+  text-align: center;
+  padding: 0;
+  color: var(--glyph);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.7);
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 60ms ease, background 90ms ease, border-color 90ms ease;
+}
+
+.dops-btn small {
+  display: block;
+  font-size: calc(9.5px * var(--dops-scale));
+  font-weight: 400;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.dops-btn.pressed {
+  transform: scale(0.92);
+  background: var(--face-on);
+  color: #16141d;
+  text-shadow: none;
+  border-color: #ffffff;
+}
+
+.dops-btn.disabled {
+  opacity: calc(var(--dops-op) * 0.32);
+  box-shadow: none;
+}
+
+/* ---- right-hand action cluster, fanned around where the thumb pivots */
+
+.dops-cluster {
+  position: absolute;
+  right: env(safe-area-inset-right, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+  width: calc(300 * var(--u));
+  height: calc(260 * var(--u));
+  pointer-events: none;
+}
+
+/* Offsets are from the bottom-right corner, in --u, fanned around where the
+   right thumb pivots:
+        [Q]    [RELOAD]
+                        [SCOPE]
+      [PICK]   [FIRE]
+                        [JUMP]                                                 */
+#dops-fire   { right: calc(96 * var(--u));  bottom: calc(40 * var(--u));  width: calc(112 * var(--u)); height: calc(112 * var(--u)); font-size: calc(15px * var(--dops-scale)); }
+#dops-jump   { right: calc(8 * var(--u));   bottom: calc(10 * var(--u));  width: calc(68 * var(--u));  height: calc(68 * var(--u)); }
+#dops-scope  { right: calc(10 * var(--u));  bottom: calc(104 * var(--u)); width: calc(80 * var(--u));  height: calc(80 * var(--u)); }
+#dops-reload { right: calc(108 * var(--u)); bottom: calc(170 * var(--u)); width: calc(70 * var(--u));  height: calc(70 * var(--u)); }
+#dops-skill  { right: calc(206 * var(--u)); bottom: calc(158 * var(--u)); width: calc(76 * var(--u));  height: calc(76 * var(--u)); }
+#dops-pickup { right: calc(214 * var(--u)); bottom: calc(48 * var(--u));  width: calc(64 * var(--u));  height: calc(64 * var(--u)); }
+
+/* The trigger reads as the primary control: bigger rim, warmer fill. */
+#dops-fire {
+  border-width: 4px;
+  background: radial-gradient(circle at 50% 42%, rgba(192, 57, 47, 0.5), rgba(24, 22, 31, 0.5) 72%);
+}
+#dops-fire.pressed { background: rgba(192, 57, 47, 0.92); color: #fff; border-color: #fff; }
+
+/* Q lights up only when the skill is actually off cooldown. */
+#dops-skill.ready {
+  border-color: #ffd166;
+  box-shadow: var(--shadow), 0 0 0 calc(3px * var(--dops-scale)) rgba(255, 209, 102, 0.35);
+}
+
+/* ---- weapon slots, up the right edge like every mobile shooter puts them */
+
+.dops-slots {
+  position: absolute;
+  right: calc(14px + env(safe-area-inset-right, 0px));
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  display: grid;
+  gap: calc(6px * var(--dops-scale));
+  pointer-events: none;
+}
+
+.dops-slots .dops-btn {
+  position: static;
+  width: calc(86px * var(--dops-scale));
+  height: calc(34px * var(--dops-scale));
+  border-radius: calc(9px * var(--dops-scale));
+  border-width: 2px;
+  font-size: calc(12px * var(--dops-scale));
+}
+.dops-slots .dops-btn.active {
+  background: var(--face-on);
+  color: #16141d;
+  text-shadow: none;
+  border-color: #fff;
+}
+
+/* ---- top corner */
+
+.dops-top {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(14px + env(safe-area-inset-right, 0px));
+  display: flex;
+  gap: calc(8px * var(--dops-scale));
+  pointer-events: none;
+}
+.dops-top .dops-btn {
+  position: static;
+  width: calc(58px * var(--dops-scale));
+  height: calc(38px * var(--dops-scale));
+  border-radius: calc(10px * var(--dops-scale));
+  border-width: 2px;
+  font-size: calc(11px * var(--dops-scale));
+}
+
+/* ------------------------------------------------------------- left-handed */
+
+#dops-touch.mirrored .dops-stick {
+  left: auto;
+  right: calc(26px + env(safe-area-inset-right, 0px));
+}
+#dops-touch.mirrored .dops-cluster {
+  right: auto;
+  left: env(safe-area-inset-left, 0px);
+  transform: scaleX(-1);
+}
+#dops-touch.mirrored .dops-cluster .dops-btn { transform: scaleX(-1); }
+#dops-touch.mirrored .dops-cluster .dops-btn.pressed { transform: scaleX(-1) scale(0.92); }
+#dops-touch.mirrored .dops-slots,
+#dops-touch.mirrored .dops-top {
+  right: auto;
+  left: calc(14px + env(safe-area-inset-left, 0px));
+}
+
+/* ------------------------------------------------------------------- toasts */
+
+.dops-hint {
+  position: absolute;
+  left: 50%;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 2px solid var(--rim);
+  border-radius: 14px;
+  background: var(--face);
+  box-shadow: var(--shadow);
+  color: var(--glyph);
+  font-size: 13px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.dops-hint.show { opacity: 1; }
+
+/* Narrow screens have no room for the weapon slots to sit clear of the cluster,
+   so they tuck in under the top row. */
+@media (max-width: 700px) {
+  .dops-slots .dops-btn { width: calc(72px * var(--dops-scale)); }
+}

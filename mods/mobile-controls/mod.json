@@ -1,0 +1,16 @@
+{
+  "id": "mobile-controls",
+  "name": "Mobile Controls",
+  "version": "1.3.0",
+  "author": "doodle-ops launcher",
+  "description": "Joystick 8 arah, geser layar untuk memutar kamera, ketuk layar kosong untuk menembak, SCOPE tahan, Q untuk skill, dan tombol ganti senjata. Semua multitouch. Bawaannya tombol hanya muncul kalau ada layar sentuh — di browser desktop, setel \"selalu nyala\" lewat tombol KONTROL SENTUH di dalam game.",
+  "scripts": [
+    "mods/mobile-controls/init.js"
+  ],
+  "files": [
+    "mods/mobile-controls/init.js",
+    "mods/mobile-controls/settings.js",
+    "mods/mobile-controls/touch.js",
+    "mods/mobile-controls/touch.css"
+  ]
+}
