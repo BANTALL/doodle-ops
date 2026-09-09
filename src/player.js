@@ -4,7 +4,6 @@
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT, BODY_RADIUS } from './combat.js';
 import { WEAPONS, HOLD, ADS, MUZZLE, CYCLE } from './weapons.js';
-import { SWING_FRAME_COUNT, SWING_FPS, SWING_PLANE_Z } from './swingframes.js';
 import { M4, V, Rng, clamp, lerp, damp, smoothstep, dirFrom, DEG, TAU } from './math.js';
 import { settings } from './settings.js';
 import { getDoodler } from './doodlers.js';
@@ -373,7 +372,7 @@ export class Player {
       lo.scoped = false;
     }
 
-    if (input.hit('KeyR')) { if (lo.startReload()) Sfx.reload('out'); }
+    if (input.hit('KeyR')) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
 
     // Melee swings land a beat after the button, matching the animation.
     if (lo.pendingMelee > 0) {
@@ -396,7 +395,7 @@ export class Player {
     const wantFire = def.auto ? input.buttons[0] : input.buttonPressed[0];
     if (wantFire) {
       if (def.kind === 'gun' && lo.ammo <= 0 && lo.reloadT <= 0 && !lo.drawT) {
-        if (lo.reserve > 0) { if (lo.startReload()) Sfx.reload('out'); }
+        if (lo.reserve > 0) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
         else if (input.buttonPressed[0]) Sfx.uiClick();
       } else {
         // Capture the scope state before firing: cycling the bolt drops the scope, and a
@@ -741,23 +740,17 @@ export class Player {
     const main = this._vmPose(lag, scratch[0]);
     if (!this.game.weapons.models[main.id]) return;
 
-    // ---- drawn swing -----------------------------------------------------
-    // While the knife is swinging, the viewmodel *is* the animation: twelve authored
-    // frames, one per animation step, each a different outline. No 3D knife, no hands -
-    // it's a cel, the way a 2D game would do it.
-    if (lo.def.kind === 'melee' && lo.meleeT >= 0) {
-      const t = Math.max(0, lo.meleeT - lag);
-      const idx = clamp(Math.floor(t * SWING_FPS), 0, SWING_FRAME_COUNT - 1);
-      const frame = this.game.swingFrames?.[idx];
-      if (frame) {
-        const vm = this.vm;
-        M4.compose(this._m,
-          { x: vm.swayX * 0.5, y: vm.swayY * 0.5 + vm.jumpOff * 0.5, z: SWING_PLANE_Z },
-          0, 0, 0, 1, 1, 1);
-        const opts = { objSeed: 4.1 + idx * 3.7, colorAmt: this.colorAmt };
-        r.vmFill(frame.fill, this._m, opts);
-        r.vmInk(frame.ink, this._m, opts);
-        return;
+    // ---- smear: the original trail -----------------------------------------
+    // Only the knife swing gets it. A couple of faint copies of the outline, sampled a
+    // fraction of an animation step back along the swing, dragging behind the real blade.
+    const lo2 = this.loadout;
+    if (lo2.def.kind === 'melee' && lo2.cooldown > 0 && main.smear > 0.06) {
+      const ghosts = main.smear > 0.65 ? 3 : 2;
+      for (let k = ghosts; k >= 1; k--) {
+        const ghost = this._vmPose(lag + k * (1 / 12) * 0.33, scratch[k]);
+        if (this.game.weapons.models[ghost.id]) {
+          this._drawWeapon(r, ghost, clamp(main.smear, 0, 1) * (0.34 / k), true, null);
+        }
       }
     }
 

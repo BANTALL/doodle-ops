@@ -1,6 +1,8 @@
-// Fully procedural WebAudio SFX - no asset files, so the whole game stays a static drop-in.
-// Everything is synthesised from noise bursts + filtered oscillators, which suits the
-// scratchy paper aesthetic better than clean samples would.
+// WebAudio SFX. Almost everything is synthesised from noise bursts + filtered oscillators,
+// which suits the scratchy paper aesthetic better than clean samples would; the pistol is
+// the exception and plays two recorded clips from assets/audio (see SAMPLES below).
+// Every sample path has a synthesised fallback, so the game still sounds right if the
+// files fail to load.
 
 import { settings } from './settings.js';
 import { clamp } from './math.js';
@@ -8,6 +10,55 @@ import { clamp } from './math.js';
 let ctx = null;
 let master = null;
 let noiseBuf = null;
+
+/**
+ * Recorded one-shots. `offset` skips leading silence, `tail` is how much of the clip we
+ * actually let through before fading - the shot has a long room tail that would stack into
+ * mush at the pistol's fire rate.
+ */
+const SAMPLES = {
+  pistolShot:   { url: new URL('../assets/audio/pistol-shot.mp3', import.meta.url).href,   offset: 0.04, tail: 0.85, gain: 1.0, buffer: null },
+  pistolReload: { url: new URL('../assets/audio/pistol-reload.mp3', import.meta.url).href, offset: 0,    tail: 1.05, gain: 1.0, buffer: null },
+};
+
+// Fetch straight away: the files are tiny, and starting now means they're usually decoded
+// before the first shot. Decoding has to wait for the AudioContext, which can't exist
+// until the player clicks something.
+const pendingBytes = {};
+for (const key of Object.keys(SAMPLES)) {
+  pendingBytes[key] = fetch(SAMPLES[key].url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)));
+  pendingBytes[key].catch(() => {});  // a missing file is not fatal - we fall back to synthesis
+}
+
+function decodeSamples() {
+  for (const key of Object.keys(SAMPLES)) {
+    const bytes = pendingBytes[key];
+    if (!bytes) continue;
+    pendingBytes[key] = null;
+    bytes
+      .then((buf) => ctx.decodeAudioData(buf))
+      .then((audio) => { SAMPLES[key].buffer = audio; })
+      .catch(() => {});
+  }
+}
+
+/** Plays a decoded clip. Returns false when it isn't available, so callers can synthesise. */
+function playSample(name, level, delay = 0) {
+  const s = SAMPLES[name];
+  if (!ctx || !s || !s.buffer || level <= 0.0005) return false;
+  const t0 = ctx.currentTime + delay;
+  const src = ctx.createBufferSource();
+  src.buffer = s.buffer;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(level * s.gain, t0);
+  g.gain.setValueAtTime(level * s.gain, t0 + s.tail * 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + s.tail);
+  src.connect(g);
+  g.connect(master);
+  src.start(t0, s.offset);
+  src.stop(t0 + s.tail + 0.02);
+  return true;
+}
 
 export function initAudio() {
   if (ctx) return ctx;
@@ -22,6 +73,8 @@ export function initAudio() {
   noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
+  decodeSamples();
   return ctx;
 }
 
@@ -96,7 +149,9 @@ export const Sfx = {
     const a = spatial(dist, 60);
     if (dist > 0 && a <= 0.001) return;
     const g = dist > 0 ? a : 1;
-    if (kind === 'pistol')      bang(t, { level: 0.42 * g, bright: 2600, decay: 0.15, thump: 120, thumpLevel: 0.5 });
+    if (kind === 'pistol') {
+      if (!playSample('pistolShot', 0.60 * g)) bang(t, { level: 0.42 * g, bright: 2600, decay: 0.15, thump: 120, thumpLevel: 0.5 });
+    }
     else if (kind === 'm4')     bang(t, { level: 0.30 * g, bright: 3400, decay: 0.09, thump: 150, thumpLevel: 0.35 });
     else if (kind === 'sniper') bang(t, { level: 0.60 * g, bright: 1700, decay: 0.42, thump: 70,  thumpLevel: 0.8 });
   },
@@ -130,11 +185,21 @@ export const Sfx = {
   },
   pickup() { if (!ctx) return; const t = ctx.currentTime; tone(t, 620, { level: 0.14, dur: 0.07, type: 'triangle' }); tone(t + 0.07, 980, { level: 0.14, dur: 0.1, type: 'triangle' }); },
   drop() { if (ctx) tone(ctx.currentTime, 420, { level: 0.1, dur: 0.1, type: 'triangle', slideTo: 240 }); },
-  reload(stage) {
+  // `kind` is the weapon id, so the pistol can use its recorded clip. Stage 'out' fires at
+  // the start of a reload, 'in' is the lighter click used for weapon swaps.
+  reload(stage, dist = 0, kind = null) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    if (stage === 'out') bang(t, { level: 0.18, bright: 1600, decay: 0.07, thump: 190, thumpLevel: 0.4 });
-    else bang(t, { level: 0.24, bright: 2000, decay: 0.08, thump: 240, thumpLevel: 0.6 });
+    const a = dist > 0 ? spatial(dist, 45) : 1;
+    if (dist > 0 && a <= 0.001) return;
+    if (stage === 'out') {
+      // Delayed slightly: the clip's magazine-insert lands ~0.52s in, and the pistol's
+      // 1.35s reload animation seats the mag around 0.67s.
+      if (kind === 'pistol' && playSample('pistolReload', 0.85 * a, 0.15)) return;
+      bang(t, { level: 0.18 * a, bright: 1600, decay: 0.07, thump: 190, thumpLevel: 0.4 });
+    } else {
+      bang(t, { level: 0.24 * a, bright: 2000, decay: 0.08, thump: 240, thumpLevel: 0.6 });
+    }
   },
   scope(on) { if (ctx) tone(ctx.currentTime, on ? 700 : 500, { level: 0.09, dur: 0.06, type: 'sine', slideTo: on ? 1000 : 360 }); },
   step(dist = 0) {

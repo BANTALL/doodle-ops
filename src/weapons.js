@@ -17,12 +17,8 @@ export const KNIFE = 'knife';
 export const WEAPONS = {
   knife: {
     id: 'knife', name: 'KNIFE', kind: 'melee', slot: 'melee',
-    damage: 42, headMult: 1.6, rate: 0.50, range: 3.25, auto: true,
-    moveMult: 1.14, drawTime: 0.34, hitDelay: 0.25,
-    // The swing is a twelve-frame drawn animation at 12fps, so it runs a full second -
-    // longer than the cadence, which means holding attack interrupts it partway. That is
-    // the intent: you see the whole thing on a single swing.
-    swingDuration: 1.0,
+    damage: 42, headMult: 1.6, rate: 0.46, range: 3.25, auto: true,
+    moveMult: 1.14, drawTime: 0.34, hitDelay: 0.145,
   },
   pistol: {
     id: 'pistol', name: 'PISTOL', kind: 'gun', slot: 'gun',

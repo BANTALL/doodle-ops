@@ -253,7 +253,7 @@ export class Bot {
     else if (!this.wantMelee && lo.isMelee && lo.hasGun && lo.ammo > 0) lo.switchTo('gun');
 
     if (lo.canReload && (!this.targetVisible || this.state === STATE.RETREAT || lo.ammo === 0)) {
-      if (lo.startReload()) Sfx.reload('out', V.dist(this.pos, game.player.pos));
+      if (lo.startReload()) Sfx.reload('out', V.dist(this.pos, game.player.pos), lo.def.id);
     }
 
     this._pickGoal();

@@ -6,8 +6,9 @@ stopped.
 
 **Play it: https://osnailcyargta-ctrl.github.io/fps/**
 
-No engine, no libraries, no build step. Raw WebGL2 and Canvas2D, about 5k lines,
-everything generated at runtime — there isn't a single image or audio file in the repo.
+No engine, no libraries, no build step. Raw WebGL2 and Canvas2D, about 5k lines. Every
+texture, model and sound is generated at runtime; the only assets in the repo are two
+pistol recordings (see [Credits](#credits)), and the game still runs without them.
 
 ---
 
@@ -147,18 +148,13 @@ animation, and here it falls out of the update schedule rather than being faked.
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
 
-**Smear frames are drawn, not stretched.** A knife swing is twelve authored frames played
-one per animation step. Frame 5 is not frame 4 scaled — it's a different outline: the blade
-loses its taper, grows a row of uneven teeth along its trailing edge, runs off the side of
-the view and stops being a knife for three frames before reassembling on the other side.
-Stretching one mesh can't do that; it always reads as the same object through a bad lens.
-While the swing plays, the viewmodel *is* the animation — no 3D knife, no hands, just the
-cel, the way a 2D game would do it. The swing runs a full second (twelve frames at twelve
-frames a second) while the attack cadence is half that, so holding attack interrupts it
-partway and a single swing shows you the whole thing.
-
-Paper shards keep a velocity stretch, since a tumbling scrap has no rest shape to distort
-away from.
+**Smear frames.** Anything that moves faster than twelve frames a second can resolve gets
+drawn more than once. The knife swing trails: because the pose is a pure function of the
+weapon timers, the same pose can be asked for a fraction of a step *ago* and drawn faintly
+behind the real blade, so the cut leaves a wake instead of teleporting between frames. The
+weapon swap twirl and the idle knife trick use the same trick, keyed off how fast that move
+is going. Paper shards get a velocity stretch, since a tumbling scrap has no rest shape to
+distort away from.
 
 **The whole viewmodel is sampled at the last animation step**, not at the current
 instant — otherwise the weapon in your hands is the one thing on screen not moving on
@@ -269,12 +265,27 @@ src/
   weapons.js    weapon stats and models
   entities.js   crates, pickups, decals, particles
   hud.js        the hand-drawn HUD
-  audio.js      procedural WebAudio SFX
+  audio.js      WebAudio SFX (synthesised, plus the two pistol samples)
   input.js      pointer lock, keys, mouse
   settings.js   persisted settings
-  swingframes.js the twelve drawn frames of a knife swing
   frustum.js    view frustum planes for culling
   math.js       vectors, matrices, RNG
 ```
 
 Needs a browser with WebGL2 — any current Chrome, Edge, Firefox or Safari.
+
+---
+
+## Credits
+
+Two recorded sounds live in `assets/audio/`. Everything else you hear is synthesised from
+noise bursts and filtered oscillators at runtime, and if these files fail to load the game
+falls back to synthesised pistol sounds without complaining.
+
+| File | Used for | Source |
+| --- | --- | --- |
+| `pistol-shot.mp3` | the pistol firing | [Freesound](https://freesound.org/) — "gunshots from a distance" (`796391`) |
+| `pistol-reload.mp3` | the pistol reload | generated with [ElevenLabs](https://elevenlabs.io/) sound effects |
+
+The Freesound clip's licence is whatever its uploader chose — check it on the sound's page
+and keep attribution as that licence requires before publishing this anywhere.
