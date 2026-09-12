@@ -26,6 +26,7 @@ const SAMPLES = {
   // 0.10s in, the scream 0.72s in. Playing them from zero would put a hole where the hit is.
   deathLego:    { url: new URL('../assets/audio/death-lego.mp3', import.meta.url).href,    offset: 0.10, tail: 1.12, gain: 1.0, buffer: null },
   hurtRah:      { url: new URL('../assets/audio/hurt-rah.mp3', import.meta.url).href,      offset: 0.72, tail: 1.36, gain: 1.0, buffer: null },
+  punch:        { url: new URL('../assets/audio/punch.mp3', import.meta.url).href,         offset: 0,    tail: 0.60, gain: 1.0, buffer: null },
 };
 
 // Fetch straight away: the files are tiny, and starting now means they're usually decoded
@@ -306,6 +307,14 @@ export const Sfx = {
     }
     else if (kind === 'm4')     bang(t, { level: 0.30 * g, bright: 3400, decay: 0.09, thump: 150, thumpLevel: 0.35 });
     else if (kind === 'sniper') bang(t, { level: 0.60 * g, bright: 1700, decay: 0.42, thump: 70,  thumpLevel: 0.8 });
+  },
+  /** A bare fist: a short thump rather than the knife's whistle. */
+  punch(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 26) : 1;
+    if (playSample('punch', 0.85 * g)) return;
+    const t = ctx.currentTime;
+    bang(t, { level: 0.26 * g, bright: 1100, decay: 0.11, thump: 110, thumpLevel: 0.8 });
   },
   swing(dist = 0) {
     if (!ctx) return;

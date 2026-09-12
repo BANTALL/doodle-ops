@@ -11,6 +11,7 @@ import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
 import { buildAxeFrames, buildAxeThrowFrames } from './axeframes.js';
+import { registerFist } from './fist.js';
 import { ThrownAxe } from './thrownaxe.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
@@ -26,6 +27,7 @@ const RESPAWN_DELAY = 2.6;
 const BOT_RESPAWN_DELAY = 3.2;
 export const VICTORY_DELAY = 2;   // seconds of free look before the result popup
 export const HEART_HEAL = 5;      // a heart is a top-up, not a medkit
+export const DEATH_HEARTS = 5;    // what a body scatters when it hits the paper
 
 // Chunks further than this (measured to the chunk's centre, so a big chunk starts losing
 // its outlines a little before its far edge crosses the line) are drawn without ink.
@@ -41,6 +43,11 @@ export class Game {
     this.ui = ui;
 
     this.weapons = buildWeaponModels(this.gl);
+    // Fists are a weapon like any other from here on: the loadout, the HUD, bot melee and
+    // the pickup machinery all find them by id. They just have no mesh - the viewmodel for
+    // fists is the two hands, which fist.js places itself.
+    const handSet = registerFist(this);
+    Object.assign(this.weapons, handSet);
     this.axeFrames = buildAxeFrames(this.gl);
     this.axeThrowFrames = buildAxeThrowFrames(this.gl);
     this.skillMeshes = buildSkillMeshes(this.gl);
@@ -653,6 +660,11 @@ export class Game {
       Sfx.playerDeath();
     }
     this.entities.addShards(V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z), 8, 2.2);
+    // Anyone who goes down scatters hearts. It rewards the kill without handing the health
+    // straight over: you have to walk into the middle of where the fight just was, which is
+    // also where whoever shoots you next is looking.
+    const drop = V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z);
+    for (let i = 0; i < DEATH_HEARTS; i++) this.entities.spawnHeart(drop);
 
     const weaponId = killer?.loadout?.id ?? 'pistol';
     if (victim.isPlayer) this.hud.resetStreak();

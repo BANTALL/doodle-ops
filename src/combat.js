@@ -1,7 +1,7 @@
 // Shared weapon handling. Player and bots run the exact same loadout state machine and
 // the exact same hitscan resolution, so a bot's shot is worth exactly what yours is.
 
-import { WEAPONS, KNIFE } from './weapons.js';
+import { WEAPONS, START_MELEE } from './weapons.js';
 import { rayCharacter } from './entities.js';
 import { V, clamp, lerp, approach, DEG } from './math.js';
 
@@ -13,9 +13,9 @@ export const HEAD_R = 0.24;
 
 /** One fighter's weapons: one melee weapon they always have, plus at most one gun. */
 export class Loadout {
-  constructor(gunId = 'pistol', meleeId = KNIFE) {
+  constructor(gunId = 'pistol', meleeId = START_MELEE) {
     this.gun = gunId;                 // null when unarmed
-    this.melee = meleeId;             // 'knife' or 'axe' - never empty
+    this.melee = meleeId;             // fists, knife or axe - never empty
     this.meleeOut = false;            // the axe is away: in flight, or stuck in something
     this.meleeSwings = 0;             // swings since the axe was last in hand
     this.pendingThrow = 0;            // time until a throw swing actually lets go

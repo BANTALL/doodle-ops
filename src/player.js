@@ -11,6 +11,7 @@ import { SHIELD_MAX_HP, SHIELD_PATCH_BELOW } from './skills.js';
 import { Sfx } from './audio.js';
 import { FillBuilder, InkBuilder } from './geom.js';
 import { AXE_FRAMES } from './axeframes.js';
+import { ID as FIST_ID, sampleFist, drawFists } from './fist.js';
 import { MAT } from './renderer.js';
 
 const WALK_SPEED = 5.15;
@@ -429,7 +430,9 @@ export class Player {
         const scoped = def.scope && lo.scopeT > 0.9;
         if (lo.tryFire(now)) {
           if (def.kind === 'melee') {
-            if (def.id === 'axe') Sfx.axeSwing(); else Sfx.swing();
+            if (def.id === 'axe') Sfx.axeSwing();
+            else if (def.id === FIST_ID) Sfx.punch();
+            else Sfx.swing();
             this.vm.kick = 1;
             this.vm.lastFrameFired = game.animFrame;
             this.swingFrame0 = game.animFrame;   // which animation step the cel sheet starts on
@@ -781,6 +784,10 @@ export class Player {
     out.weaponHidden = curDef.kind === 'melee' && lo.meleeOut && !swapping;
     out.scale = scale; out.hands = hands; out.smear = smear;
     out.handRx = handRx;
+    // Fists are posed by their own animation rather than by a grip point, and it has to be
+    // sampled here so a smear ghost - the same pose asked for a fraction of a step ago -
+    // gets the punch it belongs to instead of the current one.
+    out.essFist = id === FIST_ID ? sampleFist(this, back, out) : null;
     if (out.weaponHidden) {
       out.px += HIDDEN_HAND[0]; out.py += HIDDEN_HAND[1]; out.pz += HIDDEN_HAND[2];
       out.rx += HIDDEN_HAND[3]; out.handRx += HIDDEN_HAND[3];
@@ -860,6 +867,9 @@ export class Player {
   }
 
   _drawWeapon(r, pose, alpha, inkOnly, smear) {
+    // No mesh, no grip point: two hands posed like a boxer. `_drawWeapon` can only put one
+    // hand on a grip and optionally a second on a support, so fists draw themselves.
+    if (pose.essFist) { drawFists(r, this, pose, alpha, inkOnly, smear); return; }
     const model = this.game.weapons.models[pose.id];
     const s = pose.scale;
     const m = this._m;
@@ -898,15 +908,15 @@ export class Player {
         { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.handRx, pose.rz, s, s, s);
       const gripWorld = applyMat(mHand, pose.hold.grip);
       M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.handRx + 0.35, pose.rz, 1, 1, 1);
-      r.vmFill(hands.hand.fill, sm(local), opts);
-      r.vmInk(hands.hand.ink, sm(local), opts);
+      r.vmFill(hands.gripRight.fill, sm(local), opts);
+      r.vmInk(hands.gripRight.ink, sm(local), opts);
       this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22], smear);
 
       if (pose.hold.support && pose.scope < 0.8) {
         const sw = applyMat(mHand, pose.hold.support);
         M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.handRx + 0.5, pose.rz, 1, 1, 1);
-        r.vmFill(hands.hand.fill, sm(local), opts);
-        r.vmInk(hands.hand.ink, sm(local), opts);
+        r.vmFill(hands.gripLeft.fill, sm(local), opts);
+        r.vmInk(hands.gripLeft.ink, sm(local), opts);
         this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22], smear);
       }
     }
@@ -934,7 +944,7 @@ function makePose() {
   return {
     id: 'pistol', def: null, hold: null,
     px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0,
-    scale: 1, hands: true, smear: 0, reload: 0, scope: 0, handRx: 0, weaponHidden: false,
+    scale: 1, hands: true, smear: 0, reload: 0, scope: 0, handRx: 0, weaponHidden: false, essFist: null,
   };
 }
 

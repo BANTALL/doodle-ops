@@ -275,11 +275,17 @@ void main(){
     vec4 sc = uShadowMat * vec4(vWorld + N * 0.06, 1.0);
     vec3 pc = sc.xyz / sc.w * 0.5 + 0.5;
     if (pc.x > 0.001 && pc.x < 0.999 && pc.y > 0.001 && pc.y < 0.999 && pc.z < 1.0) {
-      vec2 texel = vec2(1.0 / 1024.0);
+      vec2 texel = vec2(1.0 / 1024.0) * 1.35;
+      // A constant bias cannot win. Large enough to stop acne on a surface facing the
+      // light, it lifts the shadow clean off its caster on one that is edge on - which is
+      // what turned cast shadows into hard grey slabs floating beside things. Scale it by
+      // the angle to the light instead.
+      float ndl = clamp(dot(N, normalize(uLightDir)), 0.0, 1.0);
+      float sbias = mix(0.0035, 0.0006, ndl);
       float sum = 0.0;
       for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
-          sum += texture(uShadowMap, vec3(pc.xy + vec2(float(x), float(y)) * texel, pc.z - 0.0016));
+          sum += texture(uShadowMap, vec3(pc.xy + vec2(float(x), float(y)) * texel, pc.z - sbias));
         }
       }
       shadow = sum / 9.0;
@@ -298,7 +304,7 @@ void main(){
     }
     // Capped at 1: paper cannot get brighter than paper, so the contrast has to come from
     // darkening what the panels don't reach rather than blowing out what they do.
-    light *= min(1.0, 0.80 + clamp(lamp, 0.0, 1.0) * 0.24) * mix(0.55, 1.0, shadow);
+    light *= min(1.0, 0.80 + clamp(lamp, 0.0, 1.0) * 0.24) * mix(0.74, 1.0, shadow);
   }
 
   float shadeAmt = 1.0 - smoothstep(0.68, 1.0, light);
@@ -308,7 +314,9 @@ void main(){
   h = max(h, hatch.b * smoothstep(0.80, 1.00, shadeAmt));
 
   // A cast shadow is drawn, not dimmed: it picks up extra hatching of its own.
-  h = max(h, hatch.g * (1.0 - shadow) * 0.85);
+  // Hatching follows the penumbra rather than stamping it: at 0.85 a soft shadow edge
+  // still got a hard band of pencil down it.
+  h = max(h, hatch.g * (1.0 - shadow) * 0.45);
 
   vec3 col = base * mix(1.0, 0.86, shadeAmt);
   col = mix(col, mix(uInkColor, col * 0.6, 0.45), h * 0.30);
@@ -526,24 +534,42 @@ void main(){
   if (uFancy > 0.5) {
     vec3 blurred = texture(uBlur, uv).rgb;
 
-    // Depth of field: far things go soft, near things stay sharp. The viewmodel is drawn
-    // through a much tighter frustum, so its depths land right at the near plane and it
-    // is never blurred - which is what we want anyway.
+    // ---- depth of field -------------------------------------------------
+    // The viewmodel is drawn into a reserved slice at the front of the depth range (see
+    // endFrame) rather than onto a cleared depth buffer, so the world's depth survives
+    // into this texture and the hands linearise to roughly the near plane. The guard is
+    // belt and braces on top of that: nothing inside a couple of metres is ever blurred,
+    // whatever wrote it.
     float d = texture(uDepth, uv).r * 2.0 - 1.0;
     float linear = (2.0 * uNear * uFar) / (uFar + uNear - d * (uFar - uNear));
-    float coc = smoothstep(uFocus, uFocus * 4.0, linear);
-    col = mix(col, blurred, clamp(coc, 0.0, 0.72));
+    float nearGuard = smoothstep(1.25, 2.50, linear);
+    float coc = smoothstep(uFocus * 1.6, uFocus * 8.0, linear);
+    col = mix(col, blurred, clamp(coc * nearGuard, 0.0, 0.55));
 
-    // Bloom, taken off the same blurred image. Thresholded after the blur, which bleeds a
-    // little, but the whole page is near-white so a strict bright pass finds nothing.
-    vec3 bright = max(blurred - vec3(0.80), vec3(0.0)) / 0.2;
-    col += bright * uBloom;
+    // ---- bloom ----------------------------------------------------------
+    // Taken off the same blurred image. Thresholded after the blur, which bleeds a little,
+    // but the whole page is near-white so a strict bright pass finds nothing.
+    vec3 bright = max(blurred - vec3(0.88), vec3(0.0)) / 0.12;
+    col += bright * uBloom * 0.55;
 
-    // Balance: pull the saturation back up that the bloom washed out, and keep the paper
-    // from clipping to flat white.
-    float luma = dot(col, vec3(0.299, 0.587, 0.114));
-    col = mix(vec3(luma), col, uSaturation);
-    col = col / (1.0 + max(col - 1.0, vec3(0.0)) * 0.85);
+    // ---- grade ----------------------------------------------------------
+    col *= 0.98;
+    // Reinhard with a shoulder, normalised so white stays white. Without the divide the
+    // curve maps 1.0 to about 0.7 and the whole page turns grey.
+    col = col * (1.0 + col / 2.56) / (1.0 + col) / 0.69531;
+
+    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(luma), col, uSaturation * 0.93);
+    // Contrast pivots on the paper tone, not on mid grey: this page lives up at 0.72 and
+    // rotating around 0.5 just darkens everything.
+    col = mix(vec3(0.72), col, 1.04);
+
+    // Cool shadows, warm highlights - a few percent, enough to stop the greys reading as
+    // dead flat without tinting the paper.
+    vec3 cool = col * vec3(0.985, 0.995, 1.020);
+    vec3 warm = col * vec3(1.020, 1.000, 0.975);
+    col = mix(col, mix(cool, warm, smoothstep(0.35, 0.95, luma)), 1.0);
+    col = max(col, vec3(0.0));
   }
 
   // Paper stock multiplied over everything, wobbling a touch each animation step so the

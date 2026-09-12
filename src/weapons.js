@@ -7,7 +7,10 @@ import { MAT } from './renderer.js';
 export const KNIFE = 'knife';
 
 /** Everything that lives in the melee slot. You carry exactly one of these at a time. */
-export const MELEE_IDS = ['knife', 'axe'];
+export const MELEE_IDS = ['fist', 'knife', 'axe'];
+
+/** What you start a match with. A knife is something you find now, not something you get. */
+export const START_MELEE = 'fist';
 
 /**
  * damage      per body hit (head multiplies it)
