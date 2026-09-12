@@ -12,6 +12,7 @@ import { Sfx } from './audio.js';
 import { FillBuilder, InkBuilder } from './geom.js';
 import { AXE_FRAMES } from './axeframes.js';
 import { ID as FIST_ID, sampleFist, drawFists } from './fist.js';
+import { DROODLE_ID } from './droodle/index.js';
 import { MAT } from './renderer.js';
 
 const WALK_SPEED = 5.15;
@@ -322,6 +323,14 @@ export class Player {
       if (this.skillCooldown === 0) this.skillCharges = this.doodler.skill?.charges ?? 0;
     }
     if (input.hit('KeyQ')) this.useSkill();
+    // Hand yourself a cannon. It's the mod's own shortcut and it stays: the thing is rare
+    // enough that waiting on a crate to show somebody what it does is its own problem.
+    if (input.hit('KeyG') && this.alive) {
+      this.loadout.takeGun(DROODLE_ID);
+      this.game.droodle.stateOf(this).shots = 0;
+      Sfx.pickup();
+      this.game.toast('DROODLE CANNON');
+    }
 
     this.loadout.update(dt);
     this._updateWeaponInput(dt, input, now);
@@ -386,7 +395,7 @@ export class Player {
       lo.scoped = false;
     }
 
-    if (input.hit('KeyR')) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
+    if (input.hit('KeyR')) { if (lo.startReload()) { if (lo.def.id === DROODLE_ID) Sfx.droodleReload(); else Sfx.reload('out', 0, lo.def.id); } }
 
     // Melee swings land a beat after the button, matching the animation.
     if (lo.pendingMelee > 0) {
@@ -419,7 +428,7 @@ export class Player {
     const wantFire = def.auto ? input.buttons[0] : input.buttonPressed[0];
     if (wantFire) {
       if (def.kind === 'gun' && lo.ammo <= 0 && lo.reloadT <= 0 && !lo.drawT) {
-        if (lo.reserve > 0) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
+        if (lo.reserve > 0) { if (lo.startReload()) { if (lo.def.id === DROODLE_ID) Sfx.droodleReload(); else Sfx.reload('out', 0, lo.def.id); } }
         else if (input.buttonPressed[0]) Sfx.uiClick();
       } else if (def.kind === 'melee' && lo.meleeOut) {
         // Empty hand: the attack button is the recall.
@@ -495,6 +504,9 @@ export class Player {
 
   _fireGun(def, scoped = false) {
     const game = this.game;
+    // Every third pull of the cannon's trigger fires nothing: it winds up, and lets go on
+    // its own nine animation frames later.
+    if (game.droodle.onPlayerFire(this, def)) return;
     const eye = this.eye;
     const dir = this.aimDir(this._dir);
     const moveFactor = clamp(Math.hypot(this.vel.x, this.vel.z) / WALK_SPEED, 0, 1) * (this.onGround ? 1 : 1.7);
@@ -788,6 +800,7 @@ export class Player {
     // sampled here so a smear ghost - the same pose asked for a fraction of a step ago -
     // gets the punch it belongs to instead of the current one.
     out.essFist = id === FIST_ID ? sampleFist(this, back, out) : null;
+    this.game.droodle.posePatch(this, back, out);
     if (out.weaponHidden) {
       out.px += HIDDEN_HAND[0]; out.py += HIDDEN_HAND[1]; out.pz += HIDDEN_HAND[2];
       out.rx += HIDDEN_HAND[3]; out.handRx += HIDDEN_HAND[3];
@@ -829,6 +842,7 @@ export class Player {
       }
     }
 
+    this.game.droodle.drawGhosts(r, this);
     this._drawWeapon(r, main, 1, false, null);
   }
 
@@ -920,6 +934,12 @@ export class Player {
         this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22], smear);
       }
     }
+
+    // Everything that comes out of the cannon's mouth - the charge, the blast, the first
+    // couple of metres of the beam - drawn here rather than in the world, because the
+    // viewmodel owns the front of the depth range and a world-space blast a metre in front
+    // of the camera would end up behind the gun that made it.
+    if (!inkOnly) this.game.droodle.drawMuzzle(r, this, pose);
 
     // --- muzzle flash, drawn in the viewmodel pass so the gun can't hide it
     if (this.flashFrames > 0 && pose.def.kind === 'gun' && this.flashMesh) {

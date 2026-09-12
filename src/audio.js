@@ -13,6 +13,7 @@ let ctx = null;
 let master = null;
 let noiseBuf = null;
 let lastScream = null;   // so a new scream can duck the one still playing
+let chargeVoice = null;  // the cannon winding up - only ever one, and it can be cut short
 
 /**
  * Recorded one-shots. `offset` skips leading silence, `tail` is how much of the clip we
@@ -27,6 +28,14 @@ const SAMPLES = {
   deathLego:    { url: new URL('../assets/audio/death-lego.mp3', import.meta.url).href,    offset: 0.10, tail: 1.12, gain: 1.0, buffer: null },
   hurtRah:      { url: new URL('../assets/audio/hurt-rah.mp3', import.meta.url).href,      offset: 0.72, tail: 1.36, gain: 1.0, buffer: null },
   punch:        { url: new URL('../assets/audio/punch.mp3', import.meta.url).href,         offset: 0,    tail: 0.60, gain: 1.0, buffer: null },
+  // The Droodle Cannon. These are already loud and already clip-hot, so they go through
+  // the drive bus rather than straight at the master, where they'd sum past full scale
+  // with everything else the cannon sets off at the same moment.
+  droodleFire:   { url: new URL('../assets/audio/droodle-fire.mp3', import.meta.url).href,   offset: 0.02, tail: 1.05, gain: 1.0, buffer: null },
+  droodleImpact: { url: new URL('../assets/audio/droodle-impact.mp3', import.meta.url).href, offset: 0.02, tail: 1.80, gain: 1.0, buffer: null },
+  droodleCharge: { url: new URL('../assets/audio/droodle-charge.mp3', import.meta.url).href, offset: 0.18, tail: 0.92, gain: 1.0, buffer: null },
+  droodleLaser:  { url: new URL('../assets/audio/droodle-laser.mp3', import.meta.url).href,  offset: 0.02, tail: 2.30, gain: 1.0, buffer: null },
+  droodleReload: { url: new URL('../assets/audio/droodle-reload.mp3', import.meta.url).href, offset: 0.04, tail: 1.28, gain: 1.0, buffer: null },
 };
 
 // Fetch straight away: the files are tiny, and starting now means they're usually decoded
@@ -110,6 +119,15 @@ function getDeathBus() {
   shaper.connect(shelf); shelf.connect(limit); limit.connect(out); out.connect(master);
   deathBus = shaper;
   return deathBus;
+}
+
+/** Ramp a voice out rather than cutting it, so stopping it isn't a click. */
+function fadeOut(voice, time = 0.06) {
+  if (!voice || !ctx) return;
+  const t = ctx.currentTime;
+  voice.gain.cancelScheduledValues(t);
+  voice.gain.setValueAtTime(voice.gain.value, t);
+  voice.gain.exponentialRampToValueAtTime(0.0001, t + time);
 }
 
 // ---------------------------------------------------------------- music
@@ -409,6 +427,49 @@ export const Sfx = {
       bang(t, { level: 0.24 * a, bright: 2000, decay: 0.08, thump: 240, thumpLevel: 0.6 });
     }
   },
+  // ---- the Droodle Cannon ------------------------------------------------
+  /** The cannon going off. Repitched a little each time, so a magazine isn't one loop. */
+  droodleFire(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 75) : 1;
+    if (dist > 0 && g <= 0.001) return;
+    if (!playSample('droodleFire', 0.85 * g, { rate: 0.96 + Math.random() * 0.09, dest: getDeathBus() })) {
+      Sfx.shoot('sniper', dist);
+    }
+  },
+  /** Where a round lands. */
+  droodleImpact(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 68) : 1;
+    if (dist > 0 && g <= 0.001) return;
+    if (!playSample('droodleImpact', 0.80 * g, { rate: 0.94 + Math.random() * 0.12, dest: getDeathBus() })) {
+      Sfx.crateBreak(dist);
+    }
+  },
+  /** Winding up. Only ever one, and it gets pulled down if the charge is interrupted. */
+  droodleCharge() {
+    if (!ctx) return;
+    fadeOut(chargeVoice, 0.05);
+    chargeVoice = playSample('droodleCharge', 0.70);
+    if (!chargeVoice) Sfx.scope(true);
+  },
+  droodleCancelCharge() { fadeOut(chargeVoice, 0.10); chargeVoice = null; },
+  /** The discharge. The charge is ducked out under it so the two don't pile up. */
+  droodleLaser(dist = 0) {
+    if (!ctx) return;
+    fadeOut(chargeVoice, 0.03);
+    chargeVoice = null;
+    const g = dist ? spatial(dist, 90) : 1;
+    if (!playSample('droodleLaser', 0.95 * g, { dest: getDeathBus() })) {
+      Sfx.shoot('sniper', dist); Sfx.crateBreak(dist);
+    }
+    duckMusic(0.30, 0.7, 0.9);
+  },
+  droodleReload() {
+    if (!ctx) return;
+    if (!playSample('droodleReload', 0.75)) Sfx.reload('out', 0, 'sniper');
+  },
+
   scope(on) { if (ctx) tone(ctx.currentTime, on ? 700 : 500, { level: 0.09, dur: 0.06, type: 'sine', slideTo: on ? 1000 : 360 }); },
   step(dist = 0) {
     if (!ctx) return;

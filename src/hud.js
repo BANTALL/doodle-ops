@@ -230,6 +230,8 @@ export class Hud {
     this._toasts();
     this._matchState(game);
     if (this.showScores) this._scoreboard(game);
+    // The cannon's drawn impact frames go over the HUD, at the device's real resolution.
+    game.droodle.drawHud(this, game.animFrame);
     if (!p.alive) this._deathOverlay(game);
     if (game.showFps) this._fps(game);
   }
@@ -539,7 +541,7 @@ export class Hud {
     const items = [
       // The melee slot names whatever is in it, and says so when the axe isn't in it.
       { key: '1', label: lo.meleeOut ? `${WEAPONS[lo.melee].name}·OUT` : WEAPONS[lo.melee].name, active: lo.isMelee },
-      { key: '2', label: lo.gun ? WEAPONS[lo.gun].name : '—', active: !lo.isMelee },
+      { key: '2', label: lo.gun ? (WEAPONS[lo.gun].hudName || WEAPONS[lo.gun].name) : '—', active: !lo.isMelee },
     ];
     let x = this.w - 236;
     for (const it of items) {

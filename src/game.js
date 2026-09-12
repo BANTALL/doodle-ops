@@ -12,6 +12,7 @@ import { Input } from './input.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
 import { buildAxeFrames, buildAxeThrowFrames } from './axeframes.js';
 import { registerFist } from './fist.js';
+import { DroodleCannon } from './droodle/index.js';
 import { ThrownAxe } from './thrownaxe.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
@@ -48,6 +49,9 @@ export class Game {
     // fists is the two hands, which fist.js places itself.
     const handSet = registerFist(this);
     Object.assign(this.weapons, handSet);
+    // The cannon files itself into WEAPONS/HOLD/MUZZLE/CYCLE, so from here on the loadout,
+    // the HUD, pickups and bot hands all find it the same way they find a pistol.
+    this.droodle = new DroodleCannon(this);
     this.axeFrames = buildAxeFrames(this.gl);
     this.axeThrowFrames = buildAxeThrowFrames(this.gl);
     this.skillMeshes = buildSkillMeshes(this.gl);
@@ -152,6 +156,7 @@ export class Game {
     this.onActorSpawned(this.player);
     for (const b of this.bots) { b.kills = 0; b.deaths = 0; b.respawn(this.pickSpawn(b)); b.animStep(ANIM_DT); }
 
+    this.droodle.newMatch();
     this.hud.killFeed.length = 0;
     this.hud.toasts.length = 0;
     this.time = 0;
@@ -329,6 +334,7 @@ export class Game {
       b.animStep(ANIM_DT, visible);
     }
     this.entities.animStep();
+    this.droodle.animStep();
     for (const t of this.turrets) t.animStep();
     for (let i = this.axes.length - 1; i >= 0; i--) {
       const a = this.axes[i];
@@ -477,6 +483,15 @@ export class Game {
   // ------------------------------------------------------------ combat events
 
   registerShot(shooter, origin, dir, hit, def) {
+    // A cannon round is not hitscan you see the end of - it is a fireball that has to get
+    // there first. The hitscan has already decided everything; the delivery is held back
+    // until the drawing arrives, and then this runs with the snapshot it took.
+    if (this.droodle.onShot(shooter, origin, dir, hit, def,
+      (snap) => this._registerShotNow(shooter, origin, dir, snap, def))) return;
+    this._registerShotNow(shooter, origin, dir, hit, def);
+  }
+
+  _registerShotNow(shooter, origin, dir, hit, def) {
     const ent = this.entities;
     const isPlayer = shooter.isPlayer;
 
@@ -488,7 +503,9 @@ export class Game {
     const end = hit.kind === 'none'
       ? V.make(origin.x + dir.x * def.range, origin.y + dir.y * def.range, origin.z + dir.z * def.range)
       : hit.point;
-    ent.addTracer(start, end, def.id === 'sniper' ? 0.075 : 0.045);
+    // The cannon's round already crossed the room as a fireball you could watch - that
+    // *was* the tracer, so it doesn't get a second one drawn instantly along the same line.
+    if (!this.droodle.suppressTracer) ent.addTracer(start, end, def.id === 'sniper' ? 0.075 : 0.045);
 
     if (hit.kind === 'actor') {
       this.applyDamage(hit.target, hit.damage, shooter, hit.head, def);
@@ -626,6 +643,7 @@ export class Game {
   }
 
   onCrateBroken(crate) {
+    if (this.droodle.crateDrop(crate)) return;
     Sfx.crateBreak(V.dist(crate.pos, this.player.pos));
     // A crate normally coughs up a gun, but roughly one in five hands over a melee weapon
     // instead - which is the only way an axe gets into a match.
@@ -818,6 +836,7 @@ export class Game {
     this._queueShadowCasters(r);
 
     this.entities.render(r, this.camera);
+    this.droodle.renderWorld(r, this.camera);
     for (const a of this.axes) a.render(r, this.weapons.models.axe, this._accumAnim);
     for (const sh of this.shields) sh.render(r, this.skillMeshes);
     for (const t of this.turrets) t.render(r, this.skillMeshes, this);
@@ -836,7 +855,7 @@ export class Game {
       scopeRadius: 0.345,
       damage: p.damageFlash,
       death: p.alive ? 0 : clamp(p.deathTimer * 1.6, 0, 0.8),
-      ...this._impactPost(r),
+      ...this.droodle.patchImpact(this._impactPost(r)),
     });
 
     // No HUD behind the menus - the start screen was reading as a pile of overlapping UI.
