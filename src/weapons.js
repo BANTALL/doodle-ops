@@ -31,8 +31,9 @@ export const WEAPONS = {
     damage: 130, headMult: 1.2, rate: 3.0, range: 5.25, auto: false,
     moveMult: 1.0, drawTime: 0.5, hitDelay: 0.42,
     swingFrames: 12,              // one drawn cel per animation step
-    throwEvery: 3,                // land this many hits and it leaves your hand
-    throwRange: 26, throwSpeed: 30, recallSpeed: 34,
+    throwEvery: 3,                // every third swing is a throw, connect or not
+    throwRange: 26, throwSpeed: 13, recallSpeed: 19,
+    throwRelease: 6 / 12,         // the throw cel it leaves the hand on, in seconds
   },
   pistol: {
     id: 'pistol', name: 'PISTOL', kind: 'gun', slot: 'gun',

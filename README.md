@@ -55,11 +55,16 @@ the axe it's yours until somebody makes you trade it.
 ### The axe
 
 It kills anything it touches, and the cost is that you get one swing every three seconds and
-the swing itself takes a full second of that. Land **three** hits on people and the third one
-carries the axe out of your hand: it flies, tumbling, and buries itself in whatever stops it —
-a body, a crate, a wall, the floor when it runs out of range. Your hand is empty until you
-**attack again**, which whistles it back to you rather than making you walk over and pick it
-up. The three notches next to the ammo counter are the throw meter.
+the swing itself takes a full second of that.
+
+**Every third swing is a throw**, whether the first two connected or not — you shouldn't have
+to land a hit to throw a weapon. The third one gets its own animation: back over the shoulder,
+over the top, and the axe leaves your hand on the sixth drawn frame with the hand open under
+it. It flies at a pace you can actually watch — a couple of seconds to cross a big room — and
+buries itself in whatever stops it: a body (for the full 130), a crate, a wall, or the floor
+when it runs out of range. Your hand is empty until you **attack again**, which whistles it
+back rather than making you walk over and pick it up. The three notches next to the ammo
+counter are the throw meter, and they fill on swings, not hits.
 
 Bots pick axes up and swing them, and will cross a room for one. They never throw — the
 throw is yours.
@@ -175,8 +180,13 @@ a wake instead of teleporting between frames. The swap twirl, the idle knife tri
 thrown axe in flight all work this way, keyed off how fast the move is going. Paper shards get
 a velocity stretch instead, since a tumbling scrap has no rest shape to distort away from.
 
-The axe is *drawn*. Its swing is twelve authored cels in `axeframes.js`, played one per
-animation step, and for that second the viewmodel **is** the cel — no 3D axe, no 3D hands.
+The axe is *drawn*. It has two sheets of twelve authored cels in `axeframes.js`, one for the
+cut and one for the throw, played one per animation step; for that second the viewmodel **is**
+the cel — no 3D axe, no 3D hands. The throw sheet is a different animation rather than a
+variant of the cut: the axe travels *away* from the camera, so the drawing shrinks toward the
+middle of the view instead of sweeping to one side, and the last six frames are an empty hand
+coming down, because by then there is a real axe out in the world and two of them would be one
+too many.
 This is the thing a stretched mesh cannot fake: frames 4 to 8 have no haft, no head and no
 hand in them, and frame 6 is two crescents of ink with a hole where the weapon ought to be.
 For one twelfth of a second there is no object. That reads as speed; scaling the same mesh

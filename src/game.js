@@ -10,7 +10,7 @@ import { Bot } from './bots.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
-import { buildAxeFrames } from './axeframes.js';
+import { buildAxeFrames, buildAxeThrowFrames } from './axeframes.js';
 import { ThrownAxe } from './thrownaxe.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
@@ -42,6 +42,7 @@ export class Game {
 
     this.weapons = buildWeaponModels(this.gl);
     this.axeFrames = buildAxeFrames(this.gl);
+    this.axeThrowFrames = buildAxeThrowFrames(this.gl);
     this.skillMeshes = buildSkillMeshes(this.gl);
     this.botNames = [...BOT_NAMES];
 
@@ -539,8 +540,8 @@ export class Game {
     const lo = owner.loadout;
     if (lo.melee !== 'axe' || lo.meleeOut) return null;
     lo.meleeOut = true;
-    lo.meleeHits = 0;
-    const from = V.make(origin.x + dir.x * 0.55, origin.y - 0.1 + dir.y * 0.55, origin.z + dir.z * 0.55);
+    lo.meleeSwings = 0;
+    const from = V.make(origin.x + dir.x * 0.85, origin.y + 0.16 + dir.y * 0.85, origin.z + dir.z * 0.85);
     const axe = new ThrownAxe(owner, from, dir);
     this.axes.push(axe);
     Sfx.axeThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));

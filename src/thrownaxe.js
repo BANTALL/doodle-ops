@@ -7,8 +7,9 @@
 //
 // It moves on the animation clock like everything else that flip-books, but each step
 // resolves as a raycast over the segment it just crossed rather than a point test at the
-// new position. At thirty metres a second a twelfth of a second is two and a half metres,
-// which is wide enough to step straight through a bot.
+// new position: even at a walking pace a twelfth of a second is wide enough to step
+// straight through a bot, and the first version threw at thirty metres a second, which
+// crossed a room in three frames and was over before you saw it leave.
 
 import { WEAPONS } from './weapons.js';
 import { rayCharacter } from './entities.js';
@@ -20,8 +21,8 @@ const ANIM_DT = 1 / 12;
 const GRAVITY = 3.2;        // barely any: a thrown axe should read as flat and fast
 // How far it tumbles per animation step. Anything much past a radian and consecutive
 // frames stop looking like the same object turning and start looking like noise.
-const SPIN_PER_STEP = 1.15;
-const RECALL_SPIN_PER_STEP = -0.95;
+const SPIN_PER_STEP = 0.92;
+const RECALL_SPIN_PER_STEP = -0.80;
 
 export class ThrownAxe {
   constructor(owner, origin, dir) {

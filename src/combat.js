@@ -17,7 +17,8 @@ export class Loadout {
     this.gun = gunId;                 // null when unarmed
     this.melee = meleeId;             // 'knife' or 'axe' - never empty
     this.meleeOut = false;            // the axe is away: in flight, or stuck in something
-    this.meleeHits = 0;               // connecting swings since the axe was last in hand
+    this.meleeSwings = 0;             // swings since the axe was last in hand
+    this.pendingThrow = 0;            // time until a throw swing actually lets go
     this.slot = gunId ? 'gun' : 'melee';
     const def = gunId ? WEAPONS[gunId] : null;
     this.ammo = def ? def.mag : 0;
@@ -33,6 +34,7 @@ export class Loadout {
     this.wantAuto = false;
     this.swapFrom = null;             // weapon we're spinning away from, during a draw
     this.slashDir = 1;                // knife swings alternate sides
+    this.throwing = false;            // the swing in progress is a throw, not a cut
   }
 
   get id() { return this.slot === 'melee' ? this.melee : this.gun; }
@@ -67,7 +69,8 @@ export class Loadout {
     this.swapFrom = this.id;
     this.melee = meleeId;
     this.meleeOut = false;
-    this.meleeHits = 0;
+    this.meleeSwings = 0;
+    this.pendingThrow = 0;
     this.pendingMelee = 0;
     if (this.slot === 'melee') { this.drawT = this.def.drawTime; this.cooldown = 0; }
     return old;
@@ -121,14 +124,30 @@ export class Loadout {
     this.scopeT = clamp(approach(this.scopeT, target, rate), 0, 1);
   }
 
+  /**
+   * Is the next swing the one that lets go? Decided before the swing rather than after, so
+   * the animation can be a throw from its first frame instead of a slash that turns into
+   * one. Counted in swings, not hits: you shouldn't have to connect to throw.
+   */
+  get nextSwingThrows() {
+    const def = this.def;
+    return !!def.throwEvery && !this.meleeOut && this.meleeSwings + 1 >= def.throwEvery;
+  }
+
   /** True when the trigger pull produces a shot right now. */
   tryFire(now) {
     if (this.busy || this.cooldown > 0) return false;
     const def = this.def;
     if (def.kind === 'melee') {
       if (this.meleeOut) return false;  // nothing in your hand to swing - callers recall instead
+      const throwing = this.nextSwingThrows;
       this.cooldown = def.rate;
-      this.pendingMelee = def.hitDelay;
+      this.meleeSwings++;
+      // A throw is a throw all the way through: it doesn't also cut whatever is in front
+      // of you on the way past.
+      if (throwing) { this.pendingThrow = def.throwRelease; this.pendingMelee = 0; }
+      else { this.pendingMelee = def.hitDelay; this.pendingThrow = 0; }
+      this.throwing = throwing;
       this.lastFire = now;
       this.slashDir = -this.slashDir;   // alternate the swing side
       return true;

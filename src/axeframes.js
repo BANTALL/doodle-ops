@@ -18,6 +18,10 @@ import { FillBuilder, InkBuilder, pushShape } from './geom.js';
 import { MAT } from './renderer.js';
 
 export const AXE_FRAMES = 12;
+export const AXE_THROW_FRAMES = 12;
+// The cel the axe actually leaves the hand on. Frames after this one have no axe in them,
+// because by then there is a real one out in the world.
+export const AXE_THROW_RELEASE = 6;
 
 // ---------------------------------------------------------------- primitives
 
@@ -134,6 +138,25 @@ function axeAt(f, i, { x, y, a, s = 1, sx = 1, sy = 1, hand = true, iw = 2.3 }) 
   }
 }
 
+/** The hand on its own, for the frames after the axe has gone. */
+function handAt(f, i, { x, y, a = 0, s = 1, open = false, iw = 2.2 }) {
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const put = (poly, mat, w) => pushShape(f, i, poly.map(([px, py]) => {
+    const qx = px * s, qy = py * s;
+    return [x + qx * ca - qy * sa, y + qx * sa + qy * ca];
+  }), mat, w);
+  put([[-0.11, -0.17], [0.11, -0.17], [0.11, 0.00], [-0.11, 0.00]], MAT.GREEN, iw * 0.9);   // cuff
+  if (open) {
+    // Fingers spread, the shape a hand makes a frame after it lets go of something.
+    put([[-0.10, -0.02], [0.10, -0.02], [0.12, 0.07], [-0.12, 0.07]], MAT.SKIN, iw * 0.95);
+    for (const [dx, dy, len] of [[-0.085, 0.06, 0.115], [-0.028, 0.06, 0.145], [0.030, 0.06, 0.140], [0.086, 0.05, 0.110]]) {
+      put([[dx - 0.022, dy], [dx + 0.022, dy], [dx + 0.016, dy + len], [dx - 0.016, dy + len]], MAT.SKIN, iw * 0.8);
+    }
+  } else {
+    put([[-0.10, -0.01], [0.10, -0.01], [0.13, 0.08], [0.08, 0.17], [-0.08, 0.17], [-0.13, 0.08]], MAT.SKIN, iw * 0.95);
+  }
+}
+
 // ---------------------------------------------------------------- the cels
 
 /**
@@ -227,11 +250,80 @@ const CELS = [
   },
 ];
 
-/** Bake every cel into its own mesh pair. Called once, at load. */
-export function buildAxeFrames(gl) {
-  return CELS.map((draw) => {
+/**
+ * The throw. A different animation from the swing, not a variation on it: the axe goes back
+ * over the shoulder, comes over the top, and *leaves*, which means it travels away from the
+ * camera rather than across it. So the drawing shrinks toward the middle of the view instead
+ * of sweeping to one side, and after frame six the hand is empty and stays empty - there is
+ * a real axe out in the world by then, and two of them would be one too many.
+ */
+const THROW_CELS = [
+  // 1 - the axe comes up. Same weapon, new intention.
+  (f, i) => { onSwing(f, i, { th: 0.98, hold: 0.56, s: 1.06 }); },
+
+  // 2 - back past the shoulder, drawn larger as it comes toward the camera on the way back.
+  (f, i) => {
+    onSwing(f, i, { th: 0.70, hold: 0.62, py: 0.10, s: 1.16, sy: 1.06 });
+    streak(f, i, 0.98, -0.06, 1.20, 0.20, 0.022, 0.004, MAT.METAL, 1.5);
+  },
+
+  // 3 - deepest wind-up, coiled and half out of frame.
+  (f, i) => {
+    onSwing(f, i, { th: 0.44, hold: 0.66, py: 0.20, s: 1.24, sx: 1.06 });
+    streak(f, i, 0.86, 0.24, 1.16, 0.46, 0.026, 0.004, MAT.METAL, 1.5);
+  },
+
+  // 4 - the snap. It comes over the top and starts to stop being an axe.
+  (f, i) => {
+    onSwing(f, i, { th: 1.42, hold: 0.60, py: 0.16, s: 1.02, sx: 1.24, sy: 0.86 });
+    swingArc(f, i, { a0: 0.52, a1: 1.34, steps: 12, seed: 61, rag: 0.022,
+      thick: (t) => 0.135 * Math.sin(Math.PI * t) });
+  },
+
+  // 5 - gone from the hand's frame of reference: a mark heading up and away, with the arm
+  //     still following it. Nothing here is an axe.
+  (f, i) => {
+    swingArc(f, i, { a0: 1.16, a1: 2.06, steps: 14, seed: 67, rag: 0.03,
+      thick: (t) => 0.155 * Math.sin(Math.PI * t) });
+    streak(f, i, 0.22, -0.34, 0.10, 0.42, 0.075, 0.014, MAT.METAL, 1.9);
+    streak(f, i, 0.44, -0.52, 0.30, -0.14, 0.060, 0.016, MAT.CRATE, 1.8);
+    handAt(f, i, { x: 0.24, y: -0.50, a: -0.55, s: 1.02 });
+  },
+
+  // 6 - release. The axe is a small shape already well up the view and shrinking, with the
+  //     hand open under it. This is the last frame that has an axe in it.
+  (f, i) => {
+    axeAt(f, i, { x: 0.02, y: 0.34, a: 1.30, s: 0.56, sx: 1.20, sy: 0.86, hand: false });
+    streak(f, i, 0.20, -0.20, 0.04, 0.26, 0.055, 0.012, MAT.METAL, 1.7);
+    streak(f, i, 0.34, -0.34, 0.16, 0.06, 0.030, 0.006, MAT.CRATE, 1.5);
+    handAt(f, i, { x: 0.20, y: -0.44, a: -0.30, s: 1.04, open: true });
+  },
+
+  // 7 - empty, at the top of the follow-through, with the lines it left behind.
+  (f, i) => {
+    handAt(f, i, { x: 0.12, y: -0.34, a: -0.12, s: 1.06, open: true });
+    streak(f, i, 0.06, 0.10, -0.02, 0.52, 0.020, 0.004, MAT.METAL, 1.4);
+    streak(f, i, 0.20, 0.04, 0.14, 0.40, 0.016, 0.004, MAT.METAL, 1.3);
+    streak(f, i, -0.08, 0.06, -0.16, 0.38, 0.014, 0.004, MAT.METAL, 1.3);
+  },
+
+  // 8-12 - the arm comes down empty and settles. It lands where the 3D empty hand takes
+  // over, over on the right, so the handover at the end of the sheet doesn't jump.
+  (f, i) => { handAt(f, i, { x: 0.22, y: -0.30, a: 0.10, s: 1.04, open: true }); },
+  (f, i) => { handAt(f, i, { x: 0.32, y: -0.38, a: 0.24, s: 1.02, open: true }); },
+  (f, i) => { handAt(f, i, { x: 0.40, y: -0.44, a: 0.30, s: 1.0 }); },
+  (f, i) => { handAt(f, i, { x: 0.43, y: -0.40, a: 0.26, s: 1.0 }); },
+  (f, i) => { handAt(f, i, { x: 0.42, y: -0.42, a: 0.28, s: 1.0 }); },
+];
+
+function bakeCels(gl, cels) {
+  return cels.map((draw) => {
     const f = new FillBuilder(), i = new InkBuilder();
     draw(f, i);
     return { fill: f.toMesh(gl), ink: i.toMesh(gl) };
   });
 }
+
+/** Bake every cel into its own mesh pair. Called once, at load. */
+export function buildAxeFrames(gl) { return bakeCels(gl, CELS); }
+export function buildAxeThrowFrames(gl) { return bakeCels(gl, THROW_CELS); }

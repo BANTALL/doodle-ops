@@ -511,7 +511,7 @@ export class Hud {
         for (let k = 0; k < n; k++) {
           const bx = x - 78 + k * 28, by = y - 18;
           this.rect(bx, by, 22, 22, 2.2, 104 + k);
-          if (k < lo.meleeHits) this.hatch(bx + 3, by + 3, 16, 16, 105 + k, INK, 5, 1.6);
+          if (k < lo.meleeSwings) this.hatch(bx + 3, by + 3, 16, 16, 105 + k, INK, 5, 1.6);
         }
         this.text('THROW', x, y + 18, 13, 'right', INK_SOFT);
       } else {

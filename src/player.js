@@ -38,6 +38,10 @@ const TWIRL_TURNS = 2;              // whole turns per trick, so it lands where 
 // across, and this is what makes that fill the lower half of the view.
 const AXE_CEL_SCALE = 0.58;
 
+// Offsets applied to the melee hold pose while the axe is away, so an empty hand sits
+// somewhere you can see it: [dx, dy, dz, dPitch].
+const HIDDEN_HAND = [0.06, 0.16, -0.06, -0.40];
+
 /** Matrix at `from` whose +Z axis points at `toward`. Used to aim the forearms. */
 function aimMatrix(out, from, toward) {
   let fx = toward[0] - from[0], fy = toward[1] - from[1], fz = toward[2] - from[2];
@@ -191,6 +195,7 @@ export class Player {
     this.twirlBlend = 0;
     this.twirlT = 0;
     this.swingFrame0 = null;
+    this.swingThrow = false;
   }
 
   /** Speed multiplier from running momentum. */
@@ -387,6 +392,14 @@ export class Player {
       lo.pendingMelee -= dt;
       if (lo.pendingMelee <= 0) this._meleeHit();
     }
+    // A throw lets go on its own beat - the cel where the hand opens.
+    if (lo.pendingThrow > 0) {
+      lo.pendingThrow -= dt;
+      if (lo.pendingThrow <= 0) {
+        const eye = this.eye;
+        game.throwAxe(this, eye, this.aimDir(this._dir));
+      }
+    }
 
     // Idle knife play: stand still holding the knife and every few seconds you flip it
     // over in your hand, then let it rest again. One trick, then a pause - a knife that
@@ -420,6 +433,8 @@ export class Player {
             this.vm.kick = 1;
             this.vm.lastFrameFired = game.animFrame;
             this.swingFrame0 = game.animFrame;   // which animation step the cel sheet starts on
+            this.swingThrow = lo.throwing;       // which sheet: the cut, or the throw
+            if (lo.throwing && this.isPlayer) game.toast('THROWING');
           } else this._fireGun(def, scoped);
         }
       }
@@ -510,12 +525,6 @@ export class Player {
     const res = resolveMelee(game.world, this, eye, dir, def);
     game.registerMelee(this, eye, dir, res, def);
 
-    // Land three swings with the axe and the third one carries it out of your hand. It
-    // only counts hits on people - chopping crates all day doesn't build the throw.
-    if (def.throwEvery && res.kind === 'actor') {
-      lo.meleeHits++;
-      if (lo.meleeHits >= def.throwEvery) game.throwAxe(this, eye, dir);
-    }
   }
 
   _updateHighlight(input) {
@@ -772,7 +781,10 @@ export class Player {
     out.weaponHidden = curDef.kind === 'melee' && lo.meleeOut && !swapping;
     out.scale = scale; out.hands = hands; out.smear = smear;
     out.handRx = handRx;
-    if (out.weaponHidden) { out.px -= 0.07; out.py += 0.26; out.pz += 0.16; out.rx -= 0.35; out.handRx -= 0.35; }
+    if (out.weaponHidden) {
+      out.px += HIDDEN_HAND[0]; out.py += HIDDEN_HAND[1]; out.pz += HIDDEN_HAND[2];
+      out.rx += HIDDEN_HAND[3]; out.handRx += HIDDEN_HAND[3];
+    }
     out.reload = reload; out.scope = scope;
     return out;
   }
@@ -820,15 +832,18 @@ export class Player {
    */
   _axeCelIndex() {
     const lo = this.loadout;
-    if (!lo.isMelee || lo.melee !== 'axe' || lo.meleeOut || lo.drawT > 0) return -1;
+    if (!lo.isMelee || lo.melee !== 'axe' || lo.drawT > 0) return -1;
     if (lo.cooldown <= 0 || this.swingFrame0 == null) return -1;
+    // A throw keeps playing after the axe has gone: the last six cels are the empty hand
+    // coming down, which is the only thing that explains where the axe went.
+    if (lo.meleeOut && !this.swingThrow) return -1;
     const k = this.game.animFrame - this.swingFrame0;
     return k >= 0 && k < AXE_FRAMES ? k : -1;
   }
 
   /** The cel, parked on a card in front of the camera. */
   _drawAxeCel(r) {
-    const frames = this.game.axeFrames;
+    const frames = this.swingThrow ? this.game.axeThrowFrames : this.game.axeFrames;
     const k = this._axeCelIndex();
     if (!frames || !frames[k]) return;
     const s = AXE_CEL_SCALE;
