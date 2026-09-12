@@ -160,7 +160,7 @@ float gridLine(vec2 p, float widthPx, float fadeAt){
 
 uniform sampler2D uHatch;
 uniform sampler2D uCrayon;
-uniform vec3 uMatColor[14];
+uniform vec3 uMatColor[15];
 uniform vec4 uOverride;     // rgb tint, a = 1 to replace the palette colour
 uniform vec3 uInkColor;
 uniform vec3 uPaperColor;

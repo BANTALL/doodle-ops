@@ -1,6 +1,6 @@
 // FISTS - what everybody starts a match with now.
 //
-// The knife stops being free. You open with your hands, and a knife or an axe is something
+// The knife stops being free. You open with your hands, and a knife or an hammer is something
 // you have to go and find, which turns the first thirty seconds of a match into a scramble
 // for a crate instead of a knife fight everybody already won.
 //

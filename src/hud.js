@@ -4,6 +4,7 @@
 
 import { clamp, hash01, TAU } from './math.js';
 import { WEAPONS } from './weapons.js';
+import { drawFireIcon, drawSkillIcon, drawWeaponIcon } from './touchicons.js';
 
 const INK = '#22202b';
 const INK_SOFT = 'rgba(34,32,43,0.55)';
@@ -572,34 +573,64 @@ export class Hud {
     this.circle(kx, ky, knob, 2.6, seed + 3);
     g.restore();
 
-    const button = (spot, label, big = false, hot = false) => {
+    // `draw` is handed the inside of the button: either a label, or a function that inks a
+    // glyph into it. The ring, the press state and the hot colour are the same either way.
+    const button = (spot, draw, big = false, hot = false) => {
       if (!spot) return;
       const down = pad.held.has(spot.id) || pad.flash.has(spot.id);
+      const col = hot ? RED : INK;
       g.save();
       g.globalAlpha = down ? 0.95 : 0.62;
       g.fillStyle = PAPER;
       g.beginPath(); g.arc(spot.x, spot.y, spot.r, 0, TAU); g.fill();
       if (down) this.hatch(spot.x - spot.r, spot.y - spot.r, spot.r * 2, spot.r * 2, spot.x | 0, INK_SOFT, 7, 1.5);
-      this.circle(spot.x, spot.y, spot.r, down ? 3.4 : 2.4, (spot.x + spot.y) | 0, hot ? RED : INK);
-      const size = Math.max(9, spot.r * (big ? 0.42 : 0.36));
-      this.text(label, spot.x, spot.y + size * 0.36, size, 'center', hot ? RED : INK);
+      this.circle(spot.x, spot.y, spot.r, down ? 3.4 : 2.4, (spot.x + spot.y) | 0, col);
+      if (typeof draw === 'function') {
+        draw(spot, col);
+      } else {
+        const size = Math.max(9, spot.r * (big ? 0.42 : 0.36));
+        this.text(draw, spot.x, spot.y + size * 0.36, size, 'center', col);
+      }
       g.restore();
+    };
+
+    /** A glyph with a word under it, for the buttons where the drawing alone is ambiguous. */
+    const iconThen = (fn, caption) => (spot, col) => {
+      const cy = caption ? spot.y - spot.r * 0.13 : spot.y;
+      if (!fn(spot.x, cy, spot.r * (caption ? 0.84 : 1), col)) return;
+      if (caption) this.text(caption, spot.x, spot.y + spot.r * 0.72, Math.max(8, spot.r * 0.27), 'center', col);
     };
 
     const p = game.player;
     const lo = p.loadout;
-    button(pad.spot('fire'), lo.isMelee ? 'HIT' : 'FIRE', true);
+
+    // The trigger is two different buttons depending on what is in your hands, so it is two
+    // different drawings: a muzzle flash, or a swipe.
+    button(pad.spot('fire'), (spot, col) => {
+      drawFireIcon(this, lo.isMelee, spot.x, spot.y, spot.r, col);
+      return true;
+    }, true);
     button(pad.spot('jump'), 'JUMP');
-    // The swap button names what you'd be swapping *to*, so you know before you press it.
-    const other = lo.isMelee
-      ? (lo.gun ? (WEAPONS[lo.gun].hudName || WEAPONS[lo.gun].name) : '—')
-      : WEAPONS[lo.melee].name;
-    button(pad.spot('swap'), other);
+    // The swap button draws what you'd be swapping *to*, so you know before you press it -
+    // and a silhouette says "sniper" faster than the word does when it is under your thumb.
+    const other = lo.isMelee ? lo.gun : lo.melee;
+    button(pad.spot('swap'), iconThen(
+      (x, y, r, col) => drawWeaponIcon(this, other, x, y, r, col),
+      other ? (WEAPONS[other].hudName || WEAPONS[other].name) : null,
+    ));
     const dry = !lo.isMelee && lo.ammo === 0;
     button(pad.spot('reload'), lo.reloadT > 0 ? '...' : 'RELOAD', false, dry);
     if (pad.showScope) button(pad.spot('scope'), 'SCOPE');
-    const ready = p.skillCooldown <= 0 && (p.skillCharges ?? 1) > 0;
-    button(pad.spot('skill'), ready ? 'SKILL' : Math.ceil(p.skillCooldown) + 's', false, ready);
+    // Skill: the doodler's own glyph, with the remaining cooldown in place of its name.
+    // A doodler with no skill gets no button at all rather than one that does nothing.
+    const skill = p.doodler?.skill;
+    if (skill) {
+      const ready = p.skillCooldown <= 0 && (p.skillCharges ?? 1) > 0;
+      button(pad.spot('skill'), iconThen(
+        (x, y, r, col) => drawSkillIcon(this, skill.id, x, y, r, col),
+        ready ? null : Math.ceil(p.skillCooldown) + 's',
+      ), false, ready);
+    }
     if (pad.showPickup) button(pad.spot('pickup'), 'TAKE', false, true);
     button(pad.topSpot('menu'), 'II');
     button(pad.topSpot('scores'), 'TAB');
@@ -608,10 +639,13 @@ export class Hud {
 
   _weaponSlots(game) {
     const lo = game.player.loadout;
+    const meleeDef = WEAPONS[lo.melee];
+    const meleeName = meleeDef.hudName || meleeDef.name;
     const y = this.h - 116;
     const items = [
-      // The melee slot names whatever is in it, and says so when the axe isn't in it.
-      { key: '1', label: lo.meleeOut ? `${WEAPONS[lo.melee].name}·OUT` : WEAPONS[lo.melee].name, active: lo.isMelee },
+      // The melee slot names whatever is in it, and says so when the hammer isn't in it.
+      // Short form: the strip is 104px and VOLCANO GREATBLADE runs off the end of it.
+      { key: '1', label: meleeName + (lo.meleeOut ? '·OUT' : ''), active: lo.isMelee },
       { key: '2', label: lo.gun ? (WEAPONS[lo.gun].hudName || WEAPONS[lo.gun].name) : '—', active: !lo.isMelee },
     ];
     let x = this.w - 236;
@@ -656,7 +690,8 @@ export class Hud {
       const g = this.ctx;
       g.save();
       g.globalAlpha = a;
-      const wname = WEAPONS[k.weaponId]?.name ?? '';
+      const wdef = WEAPONS[k.weaponId];
+      const wname = wdef ? (wdef.hudName || wdef.name) : '';
       const label = `${k.killer}   ${wname}   ${k.victim}`;
       g.font = `bold 16px ${FONT}`;
       const wdt = g.measureText(label).width + 28;

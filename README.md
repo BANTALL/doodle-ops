@@ -56,15 +56,24 @@ So frequency decides the band:
 | **FIRE** | 0.40 | constant, so it's the core of the arc and the biggest target (22mm) |
 | **JUMP** | 0.57 | up the right edge, where the thumb already is |
 | **RELOAD** | 0.66 | left of fire |
-| **SWAP** | 0.72 | above fire — it's labelled with what you'd swap *to* |
+| **SWAP** | 0.72 | above fire — it draws what you'd swap *to* |
 | **SCOPE** | 0.79 | sniper only, and a deliberate hold rather than a reflex |
-| **SKILL** | 0.87 | once a minute; carries its own cooldown |
+| **SKILL** | 0.87 | the doodler's own glyph; hidden entirely for the normie, who has no skill |
 | **TAKE** | left thumb | contextual, and you've stopped moving to do it anyway |
 | **menu, scores** | top *left* | deliberately outside both arcs, so you can't pause the game by fumbling a reload |
 
+The three buttons that change what they do are **drawings, not words** (`src/touchicons.js`,
+inked through the HUD's own wobbled primitives so they boil along with everything else). A
+word on a phone button is the wrong unit: your thumb is covering the label at the moment you
+press it, and in the half-second before that you're reading five letters instead of
+recognising a shape. So the trigger is a muzzle flash with a gun in hand and a claw swipe
+with a blade; SWAP is a silhouette of the weapon you'd get, with its name underneath; and
+SKILL is the shield, the turret or the slide, with the remaining cooldown in place of its
+name.
+
 The readouts move too: health and the doodler go top-left under the menu buttons, ammo
 drops into the dead strip along the bottom-centre that no thumb crosses, and the weapon
-strip disappears entirely because the SWAP button already says what's in the other hand.
+strip disappears entirely because the SWAP button already draws what's in the other hand.
 The stick's dead zone is followed by a square-law ramp, so a thumb can walk as well as
 sprint — a linear stick makes moving slowly almost impossible.
 
@@ -78,15 +87,16 @@ a match into a scramble for a crate instead of a knife fight everyone had alread
 |---|---|---|---|---|
 | **Fists** | 25 | fast | — | what you start with; short reach, but you move well with nothing in your hands |
 | **Knife** | 42 | fast | — | long reach, 1.6× from behind, and you move quicker holding it |
-| **Axe** | 130 | one swing per 3s | — | two metres more reach than the knife, and it throws (below) |
+| **Hammer** | 130 | one swing per 3s | — | two metres more reach than the knife, and it throws (below) |
+| **Volcano Greatblade** | 200 | one swing per 3s | — | the hammer's reach, and it burns the floor behind you (below) |
 | **Pistol** | 26 | slow | 12 | the reliable middle |
 | **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope — **a scoped shot that connects kills outright** |
 | **Droodle Cannon** | 25 / 75 | slow | 9 | a fireball you can watch, and every third pull is a beam (below) |
 
 Crates are scattered through the level. Break one and it coughs up a random gun — or about
-one time in five a melee weapon instead, which is the only way an axe enters a match, or
-one time in eight a DROODLE CANNON. Either way a heart comes with it 75% of the time (worth
+one time in five a melee weapon instead, which is the only way an hammer enters a match, one
+time in eight a DROODLE CANNON, or one time in eighteen a VOLCANO GREATBLADE. Either way a heart comes with it 75% of the time (worth
 5 HP, walked over rather than prompted for, by bots as well as you). Guns dropped by the
 dead fade off the page after about twenty seconds, so the crates stay worth opening; what a
 crate gave you stays put.
@@ -98,7 +108,7 @@ take one that's on the way, and below a third they'll cross the map for it and b
 fight they aren't being watched in.
 
 Your gun resets to a pistol when you respawn. Your melee weapon doesn't: once you've found
-the axe it's yours until somebody makes you trade it.
+the hammer it's yours until somebody makes you trade it.
 
 Fists have no mesh. The viewmodel for them is the two hands, posed like a boxer with
 alternating straight punches, so they take the draw over from the normal weapon path, which
@@ -106,27 +116,61 @@ can only put one hand on a grip and a second on a support point. The hands are a
 and handed now, which also means a gripped weapon gets a right hand on the grip and a left
 on the foregrip instead of the same mitten twice.
 
-### The axe
+### The hammer
 
 It kills anything it touches, and the cost is that you get one swing every three seconds and
 the swing itself takes a full second of that.
 
 **Every third swing is a throw**, whether the first two connected or not — you shouldn't have
 to land a hit to throw a weapon. The third one gets its own animation: back over the shoulder,
-over the top, and the axe leaves your hand on the sixth drawn frame with the hand open under
+over the top, and the hammer leaves your hand on the sixth drawn frame with the hand open under
 it. It flies at a pace you can actually watch — a couple of seconds to cross a big room — and
 buries itself in whatever stops it: a body (for the full 130), a crate, a wall, or the floor
 when it runs out of range. Your hand is empty until you **attack again**, which whistles it
 back rather than making you walk over and pick it up. The three notches next to the ammo
 counter are the throw meter, and they fill on swings, not hits.
 
-Bots pick axes up and swing them, and will cross a room for one. They never throw — the
+Bots pick hammers up and swing them, and will cross a room for one. They never throw — the
 throw is yours.
+
+### The Volcano Greatblade
+
+The hammer's opposite number: the same reach and the same three seconds, but it hits for
+**200** and it never leaves your hand. What you get instead is everything that happens
+around the swing.
+
+**It burns the ground behind you.** Carry it with the blade out and moving lays a patch of
+fire every half-metre of travel. Each one burns for **two seconds** and does **20 a second**
+to anyone standing in it — anyone but the person who lit it, so backing through your own
+trail is a real option rather than a mistake. Standing in three patches at once is still 20
+a second: it is one fire, not three.
+
+**A kill with it leaves the body standing.** Not the actual body — that respawns on the
+usual timer — but a burning copy of it, half transparent and in lava colours, facing back
+at whoever made it. It is scenery that happens to be a mine: it is not in the actor list, so
+nothing in the bot AI can see it, target it or shoot at it. Anyone but its owner coming
+within **five metres** starts a short fuse (the figure swells, and there is a sound — that
+is the only warning anybody gets) and then it goes off for **50** in the same five metres,
+falling off to two thirds at the rim. Its owner is never caught in it.
+
+You only ever have one. Killing again with the blade detonates the one you had, where it
+stands, and plants a new one at the new kill — so it is worth thinking about where you leave
+the last one.
+
+The swing is its own sheet of twelve cels (`src/volcano/frames.js`) and it is a different
+animation from the hammer's, not a variation on it. The hammer cuts sideways; this one lifts,
+**hangs for one frame with nothing happening**, and then falls down a diagonal. That hang is
+the whole read: a heavy weapon does not look heavy because it moves slowly, it looks heavy
+because it takes a beat to get going and then arrives all at once. Cels 5–8 have no blade in
+them at all — they are three nested bands of red, orange and yellow, so the smear *is* the
+fire rather than having fire added to it.
+
+Bots carry it, swing it and get the trail for free; they want it more than the hammer.
 
 ### The Droodle Cannon
 
 A dragon-head cannon bolted to your right hand, with the left on a foregrip. Two on the
-floor at map load, one crate in eight, or `G`.
+floor at map load, one crate in eight.
 
 Its round is not a bullet — it's a fireball you watch cross the room. The hitscan still runs
 up front and decides everything; the delivery is held back until the drawing arrives, and
@@ -272,20 +316,20 @@ animation, and here it falls out of the update schedule rather than being faked.
 Bots are re-baked into fresh geometry on each animation step, which is also why they cost
 two draw calls each.
 
-**Smear frames** come in two kinds, because the two weapons want different things.
+**Smear frames** come in two kinds, because the two kinds of weapon want different things.
 
 The knife *trails*. Its pose is a pure function of the weapon timers, so the same pose can be
 asked for a fraction of a step ago and drawn faintly behind the real blade, and the cut leaves
 a wake instead of teleporting between frames. The swap twirl, the idle knife trick and a
-thrown axe in flight all work this way, keyed off how fast the move is going. Paper shards get
+thrown hammer in flight all work this way, keyed off how fast the move is going. Paper shards get
 a velocity stretch instead, since a tumbling scrap has no rest shape to distort away from.
 
-The axe is *drawn*. It has two sheets of twelve authored cels in `axeframes.js`, one for the
+The hammer and the greatblade are *drawn*. The hammer has two sheets of twelve authored cels in `hammerframes.js`, one for the
 cut and one for the throw, played one per animation step; for that second the viewmodel **is**
-the cel — no 3D axe, no 3D hands. The throw sheet is a different animation rather than a
-variant of the cut: the axe travels *away* from the camera, so the drawing shrinks toward the
+the cel — no 3D hammer, no 3D hands. The throw sheet is a different animation rather than a
+variant of the cut: the hammer travels *away* from the camera, so the drawing shrinks toward the
 middle of the view instead of sweeping to one side, and the last six frames are an empty hand
-coming down, because by then there is a real axe out in the world and two of them would be one
+coming down, because by then there is a real hammer out in the world and two of them would be one
 too many.
 This is the thing a stretched mesh cannot fake: frames 4 to 8 have no haft, no head and no
 hand in them, and frame 6 is two crescents of ink with a hole where the weapon ought to be.
@@ -459,8 +503,8 @@ src/
   fist.js       fists as a weapon, and the boxing viewmodel
   hands.js      anatomical hand meshes, fist and grip
   settings.js   persisted settings
-  axeframes.js  the twelve drawn frames of an axe swing
-  thrownaxe.js  the axe once it has left your hand
+  hammerframes.js  the twelve drawn frames of an hammer swing
+  thrownhammer.js  the hammer once it has left your hand
   frustum.js    view frustum planes for culling
   droodle/      the Droodle Cannon: stats and model, world FX, screen FX, and the
                 controller that decides when any of it happens

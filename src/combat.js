@@ -15,9 +15,9 @@ export const HEAD_R = 0.24;
 export class Loadout {
   constructor(gunId = 'pistol', meleeId = START_MELEE) {
     this.gun = gunId;                 // null when unarmed
-    this.melee = meleeId;             // fists, knife or axe - never empty
-    this.meleeOut = false;            // the axe is away: in flight, or stuck in something
-    this.meleeSwings = 0;             // swings since the axe was last in hand
+    this.melee = meleeId;             // fists, knife or hammer - never empty
+    this.meleeOut = false;            // the hammer is away: in flight, or stuck in something
+    this.meleeSwings = 0;             // swings since the hammer was last in hand
     this.pendingThrow = 0;            // time until a throw swing actually lets go
     this.slot = gunId ? 'gun' : 'melee';
     const def = gunId ? WEAPONS[gunId] : null;

@@ -43,9 +43,13 @@ function gunScore(id) {
   return { m4: 3.0, sniper: 2.4, pistol: 1.8 }[id] ?? 1;
 }
 
-/** How badly a bot wants a melee weapon it hasn't got. An axe is worth crossing a room for. */
+/**
+ * How badly a bot wants a melee weapon it hasn't got. A hammer is worth crossing a room for;
+ * a greatblade is worth crossing two, and a bot holding one gets the fire trail for free
+ * without knowing anything about it.
+ */
 function meleeScore(id) {
-  return { axe: 3.0, knife: 1.0, fist: 0 }[id] ?? 0;
+  return { volcano: 4.0, hammer: 3.0, knife: 1.0, fist: 0 }[id] ?? 0;
 }
 
 export class Bot {
@@ -334,7 +338,7 @@ export class Bot {
   /** Nearest worthwhile pickup, or a crate to smash open if nothing is lying around. */
   /**
    * Is there a melee weapon worth crossing the room for? Checked rather than assumed, so a
-   * bot with a knife doesn't spend the whole match in LOOT looking for an axe that nobody
+   * bot with a knife doesn't spend the whole match in LOOT looking for an hammer that nobody
    * has dropped.
    */
   _wantsBetterMelee() {
@@ -668,7 +672,7 @@ export class Bot {
     if (V.distXZ(this.pos, p.pos) > 1.5 || Math.abs(p.pos.y - this.pos.y) > 2) return;
     const lo = this.loadout;
     if (p.slotKind === 'melee') {
-      // Bots swing an axe as happily as you do; they just never throw it, which is the
+      // Bots swing an hammer as happily as you do; they just never throw it, which is the
       // one part of the weapon that belongs to the player.
       const dropped = lo.takeMelee(p.gunId);
       if (dropped) game.entities.spawnPickup(dropped, V.make(this.pos.x, this.pos.y + 0.9, this.pos.z));

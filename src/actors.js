@@ -109,9 +109,17 @@ function limb(f, i, anchor, len, thick, rx, rz, mat, ry = 0) {
 }
 
 export class CharacterRig {
-  constructor(gl, shirtMat = MAT.BLUE) {
+  /**
+   * `palette` overrides the two materials that are otherwise the same on every doodler -
+   * trousers and skin. The fighters all share them, but a thing that only looks like a
+   * fighter does not have to: the greatblade's burning figure is this same rig with the
+   * whole ramp swapped for lava.
+   */
+  constructor(gl, shirtMat = MAT.BLUE, palette = null) {
     this.gl = gl;
     this.shirtMat = shirtMat;
+    this.pantsMat = palette?.pants ?? MAT.DARK;
+    this.skinMat = palette?.skin ?? MAT.SKIN;
     this.fill = null;
     this.ink = null;
     this.dirty = true;
@@ -135,8 +143,8 @@ export class CharacterRig {
   rebuild(pose) {
     const f = this._fb.reset(), i = this._ib.reset();
     const shirt = this.shirtMat;
-    const pants = MAT.DARK;
-    const skin = MAT.SKIN;
+    const pants = this.pantsMat;
+    const skin = this.skinMat;
 
     const walk = pose.walkPhase;
     const amt = pose.walkAmt;
@@ -164,7 +172,7 @@ export class CharacterRig {
       // Foot, kept flat-ish to the floor.
       pushOrientedBox(f, i, {
         pos: add(ankle, [0, -0.045, -0.055]), size: [0.145, 0.09, 0.25],
-        rot: [collapse * 0.6, 0, 0], mat: MAT.DARK, inkWidth: IW,
+        rot: [collapse * 0.6, 0, 0], mat: pants, inkWidth: IW,
       });
     }
 

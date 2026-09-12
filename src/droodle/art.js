@@ -1,7 +1,7 @@
 // Every drawing the mod needs, baked once at boot.
 //
 // The rule the base game plays by is that a fast thing is a *different drawing*, not the
-// same drawing scaled - twelve authored cels of an axe swing beat one stretched mesh,
+// same drawing scaled - twelve authored cels of an hammer swing beat one stretched mesh,
 // because the eye recognises a shape it has already seen and refuses to read it as speed.
 // So the explosion here is eight cels with different silhouettes, the beam is four, and
 // the fire trailing the round is three. They are generated rather than hand-plotted, but

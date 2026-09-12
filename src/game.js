@@ -11,10 +11,12 @@ import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { TouchPad } from './touch.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
-import { buildAxeFrames, buildAxeThrowFrames } from './axeframes.js';
+import { buildHammerFrames, buildHammerThrowFrames, HAMMER_FRAMES } from './hammerframes.js';
+import { VOLCANO_FRAMES } from './volcano/frames.js';
 import { registerFist } from './fist.js';
 import { DroodleCannon } from './droodle/index.js';
-import { ThrownAxe } from './thrownaxe.js';
+import { VolcanoBlade, VOLCANO_ID } from './volcano/index.js';
+import { ThrownHammer } from './thrownhammer.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
 import { Shield, Turret, buildSkillMeshes } from './skills.js';
@@ -59,8 +61,16 @@ export class Game {
     // The cannon files itself into WEAPONS/HOLD/MUZZLE/CYCLE, so from here on the loadout,
     // the HUD, pickups and bot hands all find it the same way they find a pistol.
     this.droodle = new DroodleCannon(this);
-    this.axeFrames = buildAxeFrames(this.gl);
-    this.axeThrowFrames = buildAxeThrowFrames(this.gl);
+    // Same deal for the greatblade, which also brings its own swing sheet.
+    this.volcano = new VolcanoBlade(this);
+    this.hammerFrames = buildHammerFrames(this.gl);
+    this.hammerThrowFrames = buildHammerThrowFrames(this.gl);
+    // Which melee weapons draw themselves as cels rather than as a posed mesh, and what to
+    // play. `throwFrames` is optional: only the hammer ever leaves your hand.
+    this.celSheets = {
+      hammer: { frames: this.hammerFrames, throwFrames: this.hammerThrowFrames, count: HAMMER_FRAMES, scale: 0.58, z: -0.60, x: -0.02 },
+      volcano: { frames: this.volcano.frames, throwFrames: null, count: VOLCANO_FRAMES, scale: 0.52, z: -0.62, x: 0.00 },
+    };
     this.skillMeshes = buildSkillMeshes(this.gl);
     this.botNames = [...BOT_NAMES];
 
@@ -87,7 +97,7 @@ export class Game {
     this.actors = [this.player];
     this.shields = [];
     this.turrets = [];
-    this.axes = [];              // axes in flight, stuck in something, or on their way back
+    this.hammers = [];           // hammers in flight, stuck in something, or on their way back
 
     this.map = null;
     this.entities = null;
@@ -155,7 +165,7 @@ export class Game {
     this.actors = [this.player, ...this.bots];
     this.shields.length = 0;
     this.turrets.length = 0;
-    this.axes.length = 0;
+    this.hammers.length = 0;
     this.world = { map: this.map, entities: this.entities, actors: this.actors, shields: this.shields };
 
     this.player.kills = 0; this.player.deaths = 0;
@@ -165,6 +175,7 @@ export class Game {
     for (const b of this.bots) { b.kills = 0; b.deaths = 0; b.respawn(this.pickSpawn(b)); b.animStep(ANIM_DT); }
 
     this.droodle.newMatch();
+    this.volcano.newMatch();
     this.hud.killFeed.length = 0;
     this.hud.toasts.length = 0;
     this.time = 0;
@@ -286,6 +297,7 @@ export class Game {
       t.update(dt, this);
       if (!t.alive) this.turrets.splice(i, 1);
     }
+    this.volcano.update(dt);
     if (this.impact.t > 0) this.impact.t = Math.max(0, this.impact.t - dt);
 
     // Respawns.
@@ -356,12 +368,13 @@ export class Game {
     }
     this.entities.animStep();
     this.droodle.animStep();
+    this.volcano.animStep();
     this.touch.animStep();
     for (const t of this.turrets) t.animStep();
-    for (let i = this.axes.length - 1; i >= 0; i--) {
-      const a = this.axes[i];
+    for (let i = this.hammers.length - 1; i >= 0; i--) {
+      const a = this.hammers[i];
       a.animStep(this);
-      if (a.done) this._removeAxe(a);
+      if (a.done) this._removeHammer(a);
     }
   }
 
@@ -560,7 +573,9 @@ export class Game {
 
   registerMelee(shooter, origin, dir, res, def) {
     const ent = this.entities;
-    const heavy = def.id === 'axe';
+    // Both two-handers get the bigger mark and the bigger burst. Half the read of a heavy
+    // weapon connecting is that the mark it leaves is a different size from a knife's.
+    const heavy = def.id === 'hammer' || def.id === VOLCANO_ID;
     // The arc the swing cut through the air, laid in the camera plane and rolled to match
     // the direction the weapon travelled.
     if (res.kind !== 'none') {
@@ -579,35 +594,35 @@ export class Game {
     }
   }
 
-  // ------------------------------------------------------------ the axe
+  // ------------------------------------------------------------ the hammer
 
-  /** Third connecting swing: the axe leaves the hand. */
-  throwAxe(owner, origin, dir) {
+  /** Third connecting swing: the hammer leaves the hand. */
+  throwHammer(owner, origin, dir) {
     const lo = owner.loadout;
-    if (lo.melee !== 'axe' || lo.meleeOut) return null;
+    if (lo.melee !== 'hammer' || lo.meleeOut) return null;
     lo.meleeOut = true;
     lo.meleeSwings = 0;
     const from = V.make(origin.x + dir.x * 0.85, origin.y + 0.16 + dir.y * 0.85, origin.z + dir.z * 0.85);
-    const axe = new ThrownAxe(owner, from, dir);
-    this.axes.push(axe);
-    Sfx.axeThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));
-    if (owner.isPlayer) this.toast('AXE AWAY - ATTACK TO CALL IT BACK');
-    return axe;
+    const hammer = new ThrownHammer(owner, from, dir);
+    this.hammers.push(hammer);
+    Sfx.hammerThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));
+    if (owner.isPlayer) this.toast('HAMMER AWAY - ATTACK TO CALL IT BACK');
+    return hammer;
   }
 
   /** Attacking with an empty hand: whistle it home. */
-  recallAxe(owner) {
-    const axe = this.axes.find((a) => a.owner === owner && !a.done);
-    if (!axe || !axe.recallable) return false;
-    axe.recall();
+  recallHammer(owner) {
+    const hammer = this.hammers.find((a) => a.owner === owner && !a.done);
+    if (!hammer || !hammer.recallable) return false;
+    hammer.recall();
     return true;
   }
 
-  /** The axe reached the hand it was flying toward. */
-  onAxeReturned(axe) {
-    this._removeAxe(axe);
-    const lo = axe.owner.loadout;
-    if (axe.owner.alive && lo.melee === 'axe') {
+  /** The hammer reached the hand it was flying toward. */
+  onHammerReturned(hammer) {
+    this._removeHammer(hammer);
+    const lo = hammer.owner.loadout;
+    if (hammer.owner.alive && lo.melee === 'hammer') {
       lo.meleeOut = false;
       lo.cooldown = Math.max(lo.cooldown, 0.28);   // a beat to catch it before swinging again
       lo.drawT = 0;
@@ -615,37 +630,37 @@ export class Game {
     }
   }
 
-  onAxeStuck(axe) {
-    this.entities.addBurst(axe.pos, 0.6, 3);
-    this.entities.addShards(axe.pos, 4, 2.0);
-    Sfx.axeStick(V.dist(axe.pos, this.player.pos));
+  onHammerStuck(hammer) {
+    this.entities.addBurst(hammer.pos, 0.6, 3);
+    this.entities.addShards(hammer.pos, 4, 2.0);
+    Sfx.hammerStick(V.dist(hammer.pos, this.player.pos));
   }
 
-  onAxeHitActor(axe, target, head) {
-    axe.hitActors.add(target);
-    const def = axe.def;
-    this.entities.addSlash(V.clone(axe.pos), 1.4, 0.9, 3);
-    this.applyDamage(target, Math.round(def.damage * (head ? def.headMult : 1)), axe.owner, head, def);
+  onHammerHitActor(hammer, target, head) {
+    hammer.hitActors.add(target);
+    const def = hammer.def;
+    this.entities.addSlash(V.clone(hammer.pos), 1.4, 0.9, 3);
+    this.applyDamage(target, Math.round(def.damage * (head ? def.headMult : 1)), hammer.owner, head, def);
   }
 
-  onAxeHitCrate(axe, crate) {
-    this.entities.damageCrate(crate, axe.def.damage, (c) => this.onCrateBroken(c));
+  onHammerHitCrate(hammer, crate) {
+    this.entities.damageCrate(crate, hammer.def.damage, (c) => this.onCrateBroken(c));
   }
 
   /**
-   * Take an owner's axe out of the world entirely - they swapped it away, or died holding
+   * Take an owner's hammer out of the world entirely - they swapped it away, or died holding
    * nothing. The melee slot is theirs to keep, so this only ever removes the flying copy.
    */
-  dropThrownAxe(owner) {
-    for (let i = this.axes.length - 1; i >= 0; i--) {
-      if (this.axes[i].owner === owner) { this.axes[i].done = true; this.axes.splice(i, 1); }
+  dropThrownHammer(owner) {
+    for (let i = this.hammers.length - 1; i >= 0; i--) {
+      if (this.hammers[i].owner === owner) { this.hammers[i].done = true; this.hammers.splice(i, 1); }
     }
     owner.loadout.meleeOut = false;
   }
 
-  _removeAxe(axe) {
-    const i = this.axes.indexOf(axe);
-    if (i >= 0) this.axes.splice(i, 1);
+  _removeHammer(hammer) {
+    const i = this.hammers.indexOf(hammer);
+    if (i >= 0) this.hammers.splice(i, 1);
   }
 
   applyDamage(target, amount, attacker, head, def) {
@@ -665,17 +680,18 @@ export class Game {
   }
 
   onCrateBroken(crate) {
+    if (this.volcano.crateDrop(crate)) return;
     if (this.droodle.crateDrop(crate)) return;
     Sfx.crateBreak(V.dist(crate.pos, this.player.pos));
     // A crate normally coughs up a gun, but roughly one in five hands over a melee weapon
-    // instead - which is the only way an axe gets into a match.
+    // instead - which is the only way an hammer gets into a match.
     const drop = randomDropId(this.rng);
     const p = V.make(crate.pos.x, crate.pos.y + 0.2, crate.pos.z);
     this.entities.spawnPickup(drop, p, undefined, undefined, true, true);
     // Most crates also cough up a heart alongside it.
     if (this.rng.chance(0.75)) this.entities.spawnHeart(p);
     this.entities.addBurst(p, 0.75, 3);
-    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED ${drop === 'axe' ? 'AN' : 'A'} ${WEAPONS[drop].name}`);
+    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED ${drop === 'hammer' ? 'AN' : 'A'} ${WEAPONS[drop].name}`);
   }
 
   killActor(victim, killer) {
@@ -683,7 +699,7 @@ export class Game {
     victim.alive = false;
     victim.deaths++;
     victim.dropGun?.();
-    this.dropThrownAxe(victim);
+    this.dropThrownHammer(victim);
     this.removeShield(victim);
     for (const t of this.turrets) if (t.owner === victim) t.expire(this);
     if (!victim.isPlayer) {
@@ -705,6 +721,10 @@ export class Game {
     // also where whoever shoots you next is looking.
     const drop = V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z);
     for (let i = 0; i < DEATH_HEARTS; i++) this.entities.spawnHeart(drop);
+
+    // The greatblade leaves the body standing. Read before anything below moves the actor:
+    // it wants where the victim fell, not where they respawn.
+    this.volcano.onKill(victim, killer);
 
     const weaponId = killer?.loadout?.id ?? 'pistol';
     if (victim.isPlayer) this.hud.resetStreak();
@@ -859,7 +879,8 @@ export class Game {
 
     this.entities.render(r, this.camera);
     this.droodle.renderWorld(r, this.camera);
-    for (const a of this.axes) a.render(r, this.weapons.models.axe, this._accumAnim);
+    this.volcano.renderWorld(r, this.camera);
+    for (const a of this.hammers) a.render(r, this.weapons.models.hammer, this._accumAnim);
     for (const sh of this.shields) sh.render(r, this.skillMeshes);
     for (const t of this.turrets) t.render(r, this.skillMeshes, this);
     for (const b of this.bots) {

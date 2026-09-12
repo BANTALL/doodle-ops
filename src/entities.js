@@ -238,7 +238,7 @@ export class Entities {
     if (this.pickups.length > 18) {
       // Evict the oldest perishable drop rather than whatever happens to be first, and
       // when they're all permanent, take a gun before a melee weapon: guns fall out of
-      // crates constantly and an axe is the rarest thing on the floor.
+      // crates constantly and an hammer is the rarest thing on the floor.
       let i = this.pickups.findIndex((q) => q.ttl !== Infinity);
       if (i < 0) i = this.pickups.findIndex((q) => q.slotKind !== 'melee');
       this.pickups.splice(i >= 0 ? i : 0, 1);
@@ -283,7 +283,7 @@ export class Entities {
 
   /**
    * The arc a swing leaves behind. `roll` orients it in the camera plane, so a right-to-left
-   * axe swing leaves a mark lying the way the axe went rather than a generic ring.
+   * hammer swing leaves a mark lying the way the hammer went rather than a generic ring.
    */
   addSlash(pos, size, roll, frames = 3) {
     this.slashes.push({ pos: V.clone(pos), size, roll, frames, age: 0 });

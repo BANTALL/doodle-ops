@@ -72,6 +72,9 @@ export class TouchPad {
     this.pointers = new Map();      // pointerId -> { role, id, lx, ly }
     this.showPickup = false;
     this.showScope = false;
+    // The normie has no skill, so the button is neither drawn nor pressable - an inert
+    // control under your thumb is worse than no control at all.
+    this.showSkill = false;
     // While a menu is up the pad isn't drawn, so it mustn't accept presses either - a
     // finger landing on the canvas behind a dialog would otherwise fire an invisible gun.
     this.suspended = false;
@@ -142,6 +145,7 @@ export class TouchPad {
     for (const id of Object.keys(LAYOUT)) {
       if (id === 'pickup' && !this.showPickup) continue;
       if (id === 'scope' && !this.showScope) continue;
+      if (id === 'skill' && !this.showSkill) continue;
       yield this.spot(id);
     }
     yield this.topSpot('menu');
@@ -274,6 +278,7 @@ export class TouchPad {
     const p = game.player;
     this.showPickup = !!p.highlighted;
     this.showScope = !!(p.loadout.def && p.loadout.def.scope);
+    this.showSkill = !!p.doodler?.skill;
     if (!p.alive) this.releaseAll();
   }
 

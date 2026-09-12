@@ -348,8 +348,8 @@ export const Sfx = {
     n.start(t); n.stop(t + 0.25);
   },
   stab(dist = 0) { if (ctx) bang(ctx.currentTime, { level: 0.3 * (dist ? spatial(dist, 25) : 1), bright: 900, decay: 0.1, thump: 60, thumpLevel: 0.9 }); },
-  /** The axe: everything the knife does, an octave down and twice as long. */
-  axeSwing(dist = 0) {
+  /** The hammer: everything the knife does, an octave down and twice as long. */
+  hammerSwing(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 30) : 1;
@@ -364,20 +364,73 @@ export const Sfx = {
     n.start(t); n.stop(t + 0.45);
     tone(t, 150, { level: 0.10 * g, dur: 0.28, type: 'sawtooth', slideTo: 62 });
   },
-  axeThrow(dist = 0) {
+  hammerThrow(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 40) : 1;
-    // A rising whistle, so a thrown axe is audible as a thing crossing the room.
+    // A rising whistle, so a thrown hammer is audible as a thing crossing the room.
     tone(t, 420, { level: 0.13 * g, dur: 0.34, type: 'triangle', slideTo: 1150 });
     bang(t, { level: 0.20 * g, bright: 1400, decay: 0.18, thump: 90, thumpLevel: 0.7 });
   },
-  axeStick(dist = 0) {
+  hammerStick(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 40) : 1;
     bang(t, { level: 0.42 * g, bright: 700, decay: 0.22, thump: 52, thumpLevel: 1.2, q: 1.2 });
     tone(t + 0.02, 190, { level: 0.11 * g, dur: 0.36, type: 'triangle', slideTo: 88 });
+  },
+
+  // ---- the greatblade -----------------------------------------------------
+  // All four are the same two ingredients in different proportions: filtered noise for the
+  // fire, and a low tone for the weight. What separates them is which one leads.
+  volcanoSwing(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 34) : 1;
+    // Slower and lower than the hammer's - a sweep that starts under the hand and takes the
+    // full length of the swing to arrive.
+    const n = noiseSource(0.7, 0.45);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(150, t);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.42);
+    n.connect(bp);
+    env(bp, t, 0.34 * g, 0.05, 0.46).connect(master);
+    n.start(t); n.stop(t + 0.7);
+    tone(t + 0.04, 140, { level: 0.11 * g, dur: 0.40, type: 'sawtooth', slideTo: 62 });
+  },
+  /** A body is left standing. A short upward swell, so you know something got made. */
+  volcanoPlant(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 40) : 1;
+    tone(t, 90, { level: 0.16 * g, dur: 0.55, type: 'sawtooth', slideTo: 230 });
+    const n = noiseSource(0.6, 0.5);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(600, t);
+    lp.frequency.exponentialRampToValueAtTime(2200, t + 0.5);
+    n.connect(lp);
+    env(lp, t, 0.16 * g, 0.08, 0.5).connect(master);
+    n.start(t); n.stop(t + 0.65);
+  },
+  /** It has seen someone. Two rising pips - the only warning anybody gets. */
+  volcanoArm(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 30) : 1;
+    tone(t, 760, { level: 0.15 * g, dur: 0.07, type: 'square', slideTo: 1020 });
+    tone(t + 0.11, 1020, { level: 0.15 * g, dur: 0.09, type: 'square', slideTo: 1380 });
+  },
+  volcanoBlast(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 60) : 1;
+    bang(t, { level: 0.62 * g, bright: 1500, decay: 0.42, thump: 44, thumpLevel: 1.5, q: 0.9 });
+    tone(t + 0.02, 120, { level: 0.18 * g, dur: 0.7, type: 'sawtooth', slideTo: 38 });
+    // The tail: debris coming down for half a second after the bang itself is over.
+    for (let i = 0; i < 5; i++) {
+      bang(t + 0.16 + i * 0.07, { level: 0.10 * g, bright: 2600, decay: 0.11, thumpLevel: 0 });
+    }
   },
   hitMarker() { if (ctx) tone(ctx.currentTime, 1500, { level: 0.13, dur: 0.05, type: 'square', slideTo: 2100 }); },
   hurt() {
