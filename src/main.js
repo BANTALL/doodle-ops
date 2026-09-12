@@ -4,6 +4,7 @@ import { Game } from './game.js';
 import { settings, setSetting, resetSettings } from './settings.js';
 import { initAudio, resumeAudio, setVolume, Sfx } from './audio.js';
 import { DOODLERS, DOODLER_IDS } from './doodlers.js';
+import { TouchPad } from './touch.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -53,6 +54,15 @@ function syncSettingsUI() {
   }
 }
 
+/** The line under PLAY tells you how to start, which isn't the same on a phone. */
+function syncFineprint() {
+  const el = document.querySelector('#fineprint');
+  if (!el) return;
+  el.textContent = settings.touch
+    ? 'left thumb moves · drag the right to look · needs WebGL2'
+    : 'click anywhere to lock the mouse · needs WebGL2';
+}
+
 function bindSettings(game) {
   for (const el of document.querySelectorAll('[data-setting]')) {
     const key = el.dataset.setting;
@@ -63,6 +73,7 @@ function bindSettings(game) {
       if (key === 'resolutionScale' || key === 'inkAmount') game.resize();
       if (key === 'showFps') game.showFps = settings.showFps;
       if (key === 'hurtSfx' && settings.hurtSfx) Sfx.scream();   // let them hear what they turned on
+      if (key === 'touch') { game.setTouch(settings.touch); syncFineprint(); }
       if (key === 'killLimit') game.killLimit = settings.killLimit;
       syncSettingsUI();
     });
@@ -104,6 +115,15 @@ function main() {
   bindSettings(game);
   syncSettingsUI();
   game.showFps = settings.showFps;
+  // Offer the pad by default on anything with a finger rather than a mouse, but only the
+  // first time - after that the saved setting is the player's own answer.
+  if (!localStorage.getItem('doodlefps.touchAsked')) {
+    try { localStorage.setItem('doodlefps.touchAsked', '1'); } catch { /* private mode */ }
+    if (TouchPad.likelyTouchDevice()) setSetting('touch', true);
+    syncSettingsUI();
+  }
+  game.setTouch(settings.touch);
+  syncFineprint();
   game.start();
 
   const startPlaying = () => {

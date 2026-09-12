@@ -221,10 +221,13 @@ export class Hud {
     this._hitMarkers(cx, cy);
     this._killBlot();
     this._speedLines(game);
+    // On touch, the corners belong to the thumbs. The readouts move out of them, and the
+    // weapon strip goes entirely - the SWAP button already names what you'd swap to.
+    this.touchLayout = !!game.touch?.enabled;
     this._health(game);
     this._skill(game);
     this._ammo(game);
-    this._weaponSlots(game);
+    if (!this.touchLayout) this._weaponSlots(game);
     this._pickupPrompt(game);
     this._killFeed();
     this._toasts();
@@ -232,6 +235,7 @@ export class Hud {
     if (this.showScores) this._scoreboard(game);
     // The cannon's drawn impact frames go over the HUD, at the device's real resolution.
     game.droodle.drawHud(this, game.animFrame);
+    if (game.touch?.enabled) this._touchPad(game);
     if (!p.alive) this._deathOverlay(game);
     if (game.showFps) this._fps(game);
   }
@@ -437,7 +441,11 @@ export class Hud {
 
   _health(game) {
     const p = game.player;
-    const x = 30, y = this.h - 58, w = 190, hgt = 26;
+    // Bottom-left is the stick's home on touch and the whole right edge is the action
+    // column, so health goes top-left, under the menu buttons.
+    const w = this.touchLayout ? 150 : 190, hgt = this.touchLayout ? 20 : 26;
+    const x = 30;
+    const y = this.touchLayout ? 122 : this.h - 58;
     this.panel(x - 12, y - 30, w + 26, 62, 90, 0.5);
     const frac = clamp(p.health / 100, 0, 1);
     this.rect(x, y, w, hgt, 2.6, 91);
@@ -453,10 +461,12 @@ export class Hud {
     const p = game.player;
     const skill = p.doodler.skill;
     const x = 30;
-    let y = this.h - 92;
+    // On touch the skill's own button carries its cooldown, so this readout just moves
+    // clear of the stick rather than being repeated next to it.
+    let y = this.touchLayout ? 178 : this.h - 92;
 
     // Doodler name always shows, so you can tell at a glance what you picked.
-    this.text(p.doodler.name, x, this.h - 100, 14, 'left', INK_SOFT, 'normal');
+    this.text(p.doodler.name, x, this.touchLayout ? 100 : this.h - 100, 14, 'left', INK_SOFT, 'normal');
     if (!skill) return;
 
     const shield = game.shieldOf(p);
@@ -496,7 +506,10 @@ export class Hud {
     const p = game.player;
     const lo = p.loadout;
     const def = lo.def;
-    const x = this.w - 30, y = this.h - 42;
+    // Bottom-right is the fire cluster on touch, so the ammo readout sits in the dead
+    // strip between the stick and the buttons where no thumb ever goes.
+    const x = this.touchLayout ? this.w * 0.50 : this.w - 30;
+    const y = this.touchLayout ? this.h - 26 : this.h - 42;
     this.panel(x - 210, y - 62, 222, 78, 100, 0.5);
     this.text(def.name, x, y - 44, 19, 'right', INK);
 
@@ -533,6 +546,64 @@ export class Hud {
         this.text('PRESS R', x - 200, y - 44, 15, 'left', RED);
       }
     }
+  }
+
+  /**
+   * The touch pad, drawn in the same pencil as everything else rather than as a set of
+   * flat overlay widgets - it has to look like it belongs on the page.
+   */
+  _touchPad(game) {
+    const pad = game.touch;
+    const g = this.ctx;
+    const st = pad.stick;
+    const seed = 700;
+    g.save();
+
+    // The stick: a ring where the thumb went down, with the knob inside it.
+    const base = 0.20 * pad.u, knob = 0.085 * pad.u;
+    g.save();
+    g.globalAlpha = st.active ? 0.85 : 0.40;
+    this.circle(st.cx, st.cy, base, 2.4, seed);
+    this.circle(st.cx, st.cy, base * 0.30, 1.6, seed + 9, INK_SOFT);
+    g.globalAlpha = st.active ? 0.95 : 0.55;
+    const kx = st.active ? st.kx : st.cx, ky = st.active ? st.ky : st.cy;
+    g.fillStyle = PAPER;
+    g.beginPath(); g.arc(kx, ky, knob, 0, TAU); g.fill();
+    this.circle(kx, ky, knob, 2.6, seed + 3);
+    g.restore();
+
+    const button = (spot, label, big = false, hot = false) => {
+      if (!spot) return;
+      const down = pad.held.has(spot.id) || pad.flash.has(spot.id);
+      g.save();
+      g.globalAlpha = down ? 0.95 : 0.62;
+      g.fillStyle = PAPER;
+      g.beginPath(); g.arc(spot.x, spot.y, spot.r, 0, TAU); g.fill();
+      if (down) this.hatch(spot.x - spot.r, spot.y - spot.r, spot.r * 2, spot.r * 2, spot.x | 0, INK_SOFT, 7, 1.5);
+      this.circle(spot.x, spot.y, spot.r, down ? 3.4 : 2.4, (spot.x + spot.y) | 0, hot ? RED : INK);
+      const size = Math.max(9, spot.r * (big ? 0.42 : 0.36));
+      this.text(label, spot.x, spot.y + size * 0.36, size, 'center', hot ? RED : INK);
+      g.restore();
+    };
+
+    const p = game.player;
+    const lo = p.loadout;
+    button(pad.spot('fire'), lo.isMelee ? 'HIT' : 'FIRE', true);
+    button(pad.spot('jump'), 'JUMP');
+    // The swap button names what you'd be swapping *to*, so you know before you press it.
+    const other = lo.isMelee
+      ? (lo.gun ? (WEAPONS[lo.gun].hudName || WEAPONS[lo.gun].name) : '—')
+      : WEAPONS[lo.melee].name;
+    button(pad.spot('swap'), other);
+    const dry = !lo.isMelee && lo.ammo === 0;
+    button(pad.spot('reload'), lo.reloadT > 0 ? '...' : 'RELOAD', false, dry);
+    if (pad.showScope) button(pad.spot('scope'), 'SCOPE');
+    const ready = p.skillCooldown <= 0 && (p.skillCharges ?? 1) > 0;
+    button(pad.spot('skill'), ready ? 'SKILL' : Math.ceil(p.skillCooldown) + 's', false, ready);
+    if (pad.showPickup) button(pad.spot('pickup'), 'TAKE', false, true);
+    button(pad.topSpot('menu'), 'II');
+    button(pad.topSpot('scores'), 'TAB');
+    g.restore();
   }
 
   _weaponSlots(game) {

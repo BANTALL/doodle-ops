@@ -234,7 +234,7 @@ export class Player {
     }
 
     // --- look
-    if (input.locked && (input.mouseDX || input.mouseDY)) this.applyLook(input.mouseDX, input.mouseDY);
+    if ((input.locked || input.touchMode) && (input.mouseDX || input.mouseDY)) this.applyLook(input.mouseDX, input.mouseDY);
 
     // Recoil punch: springs back toward zero.
     const spring = 46, damping = 11;
@@ -244,15 +244,14 @@ export class Player {
     this.punchYaw += this.punchVelY * dt;
 
     // --- movement intent
-    let fwd = 0, side = 0;
-    if (input.down('KeyW')) fwd += 1;
-    if (input.down('KeyS')) fwd -= 1;
-    if (input.down('KeyD')) side += 1;
-    if (input.down('KeyA')) side -= 1;
+    // Analog, so a thumb stick can ask for half speed. Keys still answer 0 or 1.
+    const axis = input.moveAxis(this._axis || (this._axis = { fwd: 0, side: 0 }));
+    let fwd = axis.fwd, side = axis.side;
     const mag = Math.hypot(fwd, side);
     let wx = 0, wz = 0;
     if (mag > 0) {
-      fwd /= mag; side /= mag;
+      const scale = Math.min(1, mag) / mag;
+      fwd *= scale; side *= scale;
       const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
       wx = (-sy * fwd) + (cy * side);
       wz = (-cy * fwd) + (-sy * side);

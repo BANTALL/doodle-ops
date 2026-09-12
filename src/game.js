@@ -9,6 +9,7 @@ import { Player } from './player.js';
 import { Bot } from './bots.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
+import { TouchPad } from './touch.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
 import { buildAxeFrames, buildAxeThrowFrames } from './axeframes.js';
 import { registerFist } from './fist.js';
@@ -41,6 +42,12 @@ export class Game {
     this.gl = this.renderer.gl;
     this.hud = new Hud(hudCanvas);
     this.input = new Input(glCanvas);
+    // Listens on the GL canvas: the HUD canvas is pointer-events:none so it can't swallow
+    // clicks meant for the menus, which also means it can't receive touches. Both canvases
+    // fill the viewport, so a coordinate in one is the same coordinate in the other.
+    this.touch = new TouchPad(this.input, glCanvas);
+    this.input.touch = this.touch;
+    this.touch.onMenu = () => this.setPaused(true);
     this.ui = ui;
 
     this.weapons = buildWeaponModels(this.gl);
@@ -95,7 +102,8 @@ export class Game {
     this._v = V.make();
 
     this.input.onLockChange = (locked) => {
-      if (!locked && this.running && !this.matchOver) this.setPaused(true);
+      // On a phone there is no lock to lose, so losing it can't mean "pause".
+      if (!locked && !this.input.touchMode && this.running && !this.matchOver) this.setPaused(true);
     };
 
     this.newMatch();
@@ -190,6 +198,15 @@ export class Game {
     this.renderer.inkAmount = settings.inkAmount;
     this.renderer.resize(w, h, dpr, settings.resolutionScale);
     this.hud.resize(w, h, dpr);
+    this.touch.resize(w, h);
+  }
+
+  /** Turn the on-screen pad on or off, and keep pointer lock out of its way. */
+  setTouch(on) {
+    this.touch.setEnabled(on);
+    this.input.touchMode = on;
+    if (on) this.input.exitLock();
+    this.touch.resize(window.innerWidth, window.innerHeight);
   }
 
   // ------------------------------------------------------------ loop
@@ -209,6 +226,9 @@ export class Game {
   setPaused(p) {
     if (this.paused === p) return;
     this.paused = p;
+    // The pad isn't drawn behind a menu, so it must not accept presses behind one either.
+    this.touch.suspended = p;
+    if (p) this.touch.releaseAll();
     if (p) { this.input.exitLock(); this.ui.showPause(); }
     else { this.ui.hideAll(); this.input.requestLock(); resumeAudio(); }
   }
@@ -252,6 +272,7 @@ export class Game {
     this.player.update(dt, this.input, now);
     for (const b of this.bots) b.update(dt, now);
     this.entities.update(dt);
+    if (this.touch.enabled) this.touch.sync(this);
     this.collectHearts(this.player);
     for (const b of this.bots) this.collectHearts(b);
 
@@ -335,6 +356,7 @@ export class Game {
     }
     this.entities.animStep();
     this.droodle.animStep();
+    this.touch.animStep();
     for (const t of this.turrets) t.animStep();
     for (let i = this.axes.length - 1; i >= 0; i--) {
       const a = this.axes[i];

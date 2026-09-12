@@ -1,8 +1,8 @@
 # DOODLE OPS
 
-A hand-drawn first-person shooter set in a paper backrooms. You against five bots, three
-guns and a knife, in a level where somebody got halfway through colouring it in and
-stopped.
+A hand-drawn first-person shooter set in a paper backrooms. You against five bots, in a
+level where somebody got halfway through colouring it in and stopped. You start with your
+fists; everything else is on the floor or inside a crate.
 
 **Play it: https://osnailcyargta-ctrl.github.io/fps/**
 
@@ -30,27 +30,81 @@ them.
 Mouse sensitivity, a separate scoped sensitivity, FOV, volume, render scale, ink weight,
 bot count and the kill limit all live in the pause menu and persist between sessions.
 
+### On a phone
+
+There's an **On-screen controls** toggle on the start screen — off by default, and offered
+pre-ticked the first time you open the game on something with a finger rather than a mouse.
+With it on there's no pointer lock to lose, so the game stops treating "not locked" as
+"paused".
+
+Left thumb moves, and the stick appears wherever your thumb lands in the left half rather
+than sitting in one spot. Drag anywhere on the right that isn't a button to look. The rest
+is laid out by how far a thumb actually reaches:
+
+Each thumb pivots at the bottom corner on its side and sweeps an arc. How far it gets is a
+*physical* distance — about 50-60mm — so it has to be measured against the screen's short
+edge, which is the one that means the same number of millimetres on every phone. Within
+0.70 of that edge is comfortable; within 0.90 is fine for something you press now and then;
+past that is a regrip, which in a firefight means you don't press it at all. Laying a pad
+out in fractions of the *width* is the usual mistake: on a 21:9 screen "x = 0.7" is a
+completely different reach from "x = 0.7" on a tablet.
+
+So frequency decides the band:
+
+| | reach | |
+|---|---|---|
+| **FIRE** | 0.40 | constant, so it's the core of the arc and the biggest target (22mm) |
+| **JUMP** | 0.57 | up the right edge, where the thumb already is |
+| **RELOAD** | 0.66 | left of fire |
+| **SWAP** | 0.72 | above fire — it's labelled with what you'd swap *to* |
+| **SCOPE** | 0.79 | sniper only, and a deliberate hold rather than a reflex |
+| **SKILL** | 0.87 | once a minute; carries its own cooldown |
+| **TAKE** | left thumb | contextual, and you've stopped moving to do it anyway |
+| **menu, scores** | top *left* | deliberately outside both arcs, so you can't pause the game by fumbling a reload |
+
+The readouts move too: health and the doodler go top-left under the menu buttons, ammo
+drops into the dead strip along the bottom-centre that no thumb crosses, and the weapon
+strip disappears entirely because the SWAP button already says what's in the other hand.
+The stick's dead zone is followed by a square-law ramp, so a thumb can walk as well as
+sprint — a linear stick makes moving slowly almost impossible.
+
 ## Weapons
 
 You carry **one** melee weapon plus **one** gun. Picking either up drops the one it
-replaces.
+replaces. Everybody opens with bare fists, which is what turns the first thirty seconds of
+a match into a scramble for a crate instead of a knife fight everyone had already won.
 
 | | damage | rate of fire | magazine | notes |
 |---|---|---|---|---|
+| **Fists** | 25 | fast | — | what you start with; short reach, but you move well with nothing in your hands |
 | **Knife** | 42 | fast | — | long reach, 1.6× from behind, and you move quicker holding it |
 | **Axe** | 130 | one swing per 3s | — | two metres more reach than the knife, and it throws (below) |
 | **Pistol** | 26 | slow | 12 | the reliable middle |
 | **M4** | 14 | very fast | 50 | high volume, falls off hard at range |
 | **Sniper** | 88 | very slow | 1 | hold right mouse to scope — **a scoped shot that connects kills outright** |
+| **Droodle Cannon** | 25 / 75 | slow | 9 | a fireball you can watch, and every third pull is a beam (below) |
 
-Crates are scattered through the level. Break one and it coughs up a random gun — or, about
-one time in five, a melee weapon instead, which is the only way an axe enters a match. Either
-way a heart comes with it 75% of the time (worth 5 HP, walked over rather than prompted for,
-by bots as well as you). Guns dropped by the dead fade off the page after about twenty
-seconds, so the crates stay worth opening; what a crate gave you stays put.
+Crates are scattered through the level. Break one and it coughs up a random gun — or about
+one time in five a melee weapon instead, which is the only way an axe enters a match, or
+one time in eight a DROODLE CANNON. Either way a heart comes with it 75% of the time (worth
+5 HP, walked over rather than prompted for, by bots as well as you). Guns dropped by the
+dead fade off the page after about twenty seconds, so the crates stay worth opening; what a
+crate gave you stays put.
+
+**Anyone who dies scatters five hearts.** It pays for the kill without handing the health
+straight over — you have to walk into the middle of where the fight just was, which is also
+where whoever shoots you next is looking. Bots want them: below two thirds health they'll
+take one that's on the way, and below a third they'll cross the map for it and break off a
+fight they aren't being watched in.
 
 Your gun resets to a pistol when you respawn. Your melee weapon doesn't: once you've found
 the axe it's yours until somebody makes you trade it.
+
+Fists have no mesh. The viewmodel for them is the two hands, posed like a boxer with
+alternating straight punches, so they take the draw over from the normal weapon path, which
+can only put one hand on a grip and a second on a support point. The hands are anatomical
+and handed now, which also means a gripped weapon gets a right hand on the grip and a left
+on the foregrip instead of the same mitten twice.
 
 ### The axe
 
@@ -68,6 +122,26 @@ counter are the throw meter, and they fill on swings, not hits.
 
 Bots pick axes up and swing them, and will cross a room for one. They never throw — the
 throw is yours.
+
+### The Droodle Cannon
+
+A dragon-head cannon bolted to your right hand, with the left on a foregrip. Two on the
+floor at map load, one crate in eight, or `G`.
+
+Its round is not a bullet — it's a fireball you watch cross the room. The hitscan still runs
+up front and decides everything; the delivery is held back until the drawing arrives, and
+the tracer is suppressed, because the round you watched *was* the tracer. And because it's a
+fireball rather than a bullet it's measured against a body three times as wide, with half a
+metre added above the head and below the feet: a shot that sails over a shoulder looks
+exactly as much like a hit as one through a hip.
+
+Every third pull fires nothing. It winds up for nine animation frames — reared back and
+shaking, the jitter hashed off the frame number so it's a different drawing every twelfth of
+a second and the same one in between — and then lets go on its own: a straight beam to the
+first wall, **75 to everything standing in it**, chewing crates and shields on the way
+without being stopped by them.
+
+Dying drops it like any other gun.
 
 ## Doodlers
 
@@ -148,15 +222,41 @@ On, four things switch in:
   ceiling full of light panels. Its near plane starts just below the ceiling — otherwise
   the ceiling is the first thing the light hits and the whole building sits in its shadow,
   which is true and useless, since the panels are *in* it. A cast shadow isn't dimmed, it's
-  drawn: it picks up cross-hatching of its own.
+  drawn: it picks up cross-hatching of its own. The depth bias is slope-scaled, because a
+  constant one cannot win — large enough to stop acne on a surface facing the light, it
+  lifts the shadow clean off its caster on one that's edge on, which is what turned cast
+  shadows into hard grey slabs floating next to things.
 - **Light panel falloff**, from the eight nearest panels to the camera, so standing under
   one is brighter than standing between them. Capped at paper white — paper can't get
   brighter than paper, so the contrast comes from darkening what the panels don't reach.
 - **Bloom and depth of field**, sharing one half-resolution blur (two chains would look
   marginally better and cost twice as much for a game drawn in pencil). Depth comes from a
   sampleable depth texture blitted out of the multisampled buffer, so MSAA survives.
-- **Saturation balance**, pulling back the colour the bloom washes out and keeping the
-  paper off the clipping point.
+- **A grade**, rather than a balance: exposure, a Reinhard shoulder normalised so white
+  stays white, saturation around luma, contrast pivoting on the paper tone instead of mid
+  grey, and a few percent of split tone so the greys don't read as dead flat.
+
+### The depth-of-field bug this used to have
+
+Worth writing down, because the symptom and the cause were nowhere near each other.
+
+The viewmodel is drawn last, and it used to clear the depth buffer first so that walls
+couldn't cut through the player's hands. That clear happened *before* the multisampled
+depth was resolved into the texture depth of field reads — so the DoF pass saw depth 1.0
+everywhere, linearised that to the far plane, and blended in maximum blur across the entire
+frame. Fancy mode was a permanent soft-focus filter, and the hands went soft the moment you
+looked at anything far away.
+
+The fix isn't to stop clearing: it's to not need to. The viewmodel now draws into a
+reserved slice at the front of the depth range (`glDepthRange(0, 0.02)`). Under the world's
+own projection, with its near plane at 0.05, everything the world draws lands above 0.9 —
+so the viewmodel still wins every depth test and still occludes itself, while the world's
+depth survives into the texture and the hands linearise to roughly the near plane, which is
+exactly where DoF wants them.
+
+Measured down a 45m sightline, mean |laplacian| over the frame: **8.55 before, 15.76 after**,
+against 13.57 with fancy off. Over the hands: **13.47 before, 19.71 after**, within 2% of
+unblurred.
 
 ## The look
 
@@ -354,11 +454,16 @@ src/
   entities.js   crates, pickups, decals, particles
   hud.js        the hand-drawn HUD
   audio.js      WebAudio SFX (synthesised, plus the two pistol samples)
-  input.js      pointer lock, keys, mouse
+  input.js      pointer lock, keys, mouse, analog move axis
+  touch.js      the on-screen pad, and the thumb-reach layout behind it
+  fist.js       fists as a weapon, and the boxing viewmodel
+  hands.js      anatomical hand meshes, fist and grip
   settings.js   persisted settings
   axeframes.js  the twelve drawn frames of an axe swing
   thrownaxe.js  the axe once it has left your hand
   frustum.js    view frustum planes for culling
+  droodle/      the Droodle Cannon: stats and model, world FX, screen FX, and the
+                controller that decides when any of it happens
   math.js       vectors, matrices, RNG
 ```
 
@@ -368,7 +473,7 @@ Needs a browser with WebGL2 — any current Chrome, Edge, Firefox or Safari.
 
 ## Credits
 
-Six recorded sounds live in `assets/audio/`. Everything else you hear is synthesised at
+Twelve recorded sounds live in `assets/audio/`. Everything else you hear is synthesised at
 runtime, and if any of these fail to load the game falls back to a synthesised version
 without complaining.
 
@@ -380,9 +485,25 @@ without complaining.
 | `hurt-rah.mp3` | the optional scream on taking damage | supplied |
 | `music-archive-echoes.mp3` | theme, track 1 | supplied — *Archive Echoes* |
 | `music-archive-echoes-2.mp3` | theme, track 2 | supplied — *Archive Echoes* |
+| `punch.mp3` | a bare fist landing | from the Essential mod |
+| `droodle-fire.mp3` | the cannon firing | from the Droodle mod |
+| `droodle-impact.mp3` | where its round lands | from the Droodle mod |
+| `droodle-charge.mp3` | the cannon winding up | from the Droodle mod |
+| `droodle-laser.mp3` | the beam | from the Droodle mod |
+| `droodle-reload.mp3` | the cannon reloading | from the Droodle mod |
 
 **Licences are not sorted out here.** The Freesound clip carries whatever licence its
 uploader chose — check it on the sound's page and keep attribution as that licence requires.
-The four supplied files came in without provenance, so before publishing this anywhere,
-confirm you have the right to redistribute them; the two music tracks in particular are the
-kind of thing a rights holder notices on a public page.
+Everything else arrived without provenance, so before publishing this anywhere, confirm you
+have the right to redistribute it; the two music tracks in particular are the kind of thing
+a rights holder notices on a public page.
+
+## Where three of these features came from
+
+The fists, the Droodle Cannon and the fancy-shader fixes started as three mods, and are
+native features now rather than a mod loader and three zips. Left out of Essential on
+request: wall run, parry/guard, and its own momentum and slide (the game keeps the ones it
+had). The energy orb went with the guard, since a guard break was the only thing that ever
+threw one. Two deliberate changes against the mods: the Droodle Cannon does **not** survive
+death — dying drops it like any other gun — and Essential's kill-heal is replaced by the
+five hearts a body scatters.

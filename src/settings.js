@@ -12,6 +12,7 @@ export const DEFAULTS = {
   inkAmount: 1.0,        // thickness multiplier for the ink outlines
   showFps: false,
   hurtSfx: false,       // the scream when you take a hit - off unless you ask for it
+  touch: false,         // on-screen controls for phones - off unless you ask for them
   botCount: 5,
   killLimit: 20,
   doodler: 'normies',

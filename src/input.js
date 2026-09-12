@@ -1,5 +1,7 @@
-// Keyboard / mouse plumbing with pointer lock. Exposes edge-triggered state the
-// game loop consumes once per frame.
+// Keyboard / mouse plumbing with pointer lock, and the on-screen pad when that is on.
+// Exposes edge-triggered state the game loop consumes once per frame.
+
+const clamp01 = (v) => (v < -1 ? -1 : v > 1 ? 1 : v);
 
 export class Input {
   constructor(canvas) {
@@ -16,6 +18,11 @@ export class Input {
     this.locked = false;
     this.onLockChange = null;
     this.enabled = true;
+    // Touch controls don't use pointer lock - there is no cursor to capture, and asking
+    // for it on a phone either fails or takes the browser out of the way of its own UI.
+    // With the pad on, lock is skipped and the game never treats "not locked" as paused.
+    this.touchMode = false;
+    this.touch = null;
 
     this._bind();
   }
@@ -60,14 +67,14 @@ export class Input {
     this.canvas.addEventListener('contextmenu', stop);
 
     window.addEventListener('wheel', (e) => {
-      if (!this.locked) return;
+      if (!this.locked && !this.touchMode) return;
       e.preventDefault();
       this.wheel += Math.sign(e.deltaY);
     }, { passive: false });
   }
 
   requestLock() {
-    if (this.locked) return;
+    if (this.touchMode || this.locked) return;
     const p = this.canvas.requestPointerLock?.({ unadjustedMovement: true });
     // Chrome returns a promise when unadjustedMovement is requested; fall back if unsupported.
     if (p && typeof p.catch === 'function') p.catch(() => this.canvas.requestPointerLock());
@@ -76,6 +83,24 @@ export class Input {
   exitLock() { if (this.locked) document.exitPointerLock?.(); }
 
   down(code) { return this.keys.has(code); }
+
+  /**
+   * Movement as an analog pair, so a thumb stick can ask for half speed. The keyboard can
+   * only ever answer 0 or 1, which is what it has always done.
+   */
+  moveAxis(out = { fwd: 0, side: 0 }) {
+    let fwd = 0, side = 0;
+    if (this.keys.has('KeyW')) fwd += 1;
+    if (this.keys.has('KeyS')) fwd -= 1;
+    if (this.keys.has('KeyD')) side += 1;
+    if (this.keys.has('KeyA')) side -= 1;
+    if (this.touchMode && this.touch) {
+      fwd += -this.touch.stick.y;
+      side += this.touch.stick.x;
+    }
+    out.fwd = clamp01(fwd); out.side = clamp01(side);
+    return out;
+  }
   hit(code) { return this.pressed.has(code); }
   /** Call at the end of every frame. */
   endFrame() {

@@ -46,10 +46,15 @@
         <div class="ctrl"><kbd>ESC</kbd><span>pause &amp; settings</span></div>
       </div>
 
-      <p class="note">Shoot the crates. They cough up a random gun. Picking one up drops the one you're holding.</p>
+      <p class="note">Smash the crates. They cough up a gun, a blade, or now and then a DROODLE CANNON. You start with your fists.</p>
+
+      <div class="setting toggle lobby-toggle">
+        <label for="s-touch">On-screen controls <em>(phones and tablets)</em></label>
+        <input id="s-touch" type="checkbox" data-setting="touch">
+      </div>
 
       <button id="btn-play" class="big-button">PLAY</button>
-      <p class="fineprint">click anywhere to lock the mouse · needs WebGL2</p>
+      <p class="fineprint" id="fineprint">click anywhere to lock the mouse · needs WebGL2</p>
     </div>
   </section>
 
@@ -123,6 +128,10 @@
         <div class="setting toggle">
           <label for="s-hurtsfx">Scream when you take damage <em>(off by default)</em></label>
           <input id="s-hurtsfx" type="checkbox" data-setting="hurtSfx">
+        </div>
+        <div class="setting toggle">
+          <label for="s-touch2">On-screen controls <em>(phones and tablets)</em></label>
+          <input id="s-touch2" type="checkbox" data-setting="touch">
         </div>
       </div>
 
