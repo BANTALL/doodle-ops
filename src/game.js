@@ -9,9 +9,14 @@ import { Player } from './player.js';
 import { Bot } from './bots.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
+import { TouchPad } from './touch.js';
 import { buildWeaponModels, WEAPONS, randomGunId, randomDropId } from './weapons.js';
-import { buildAxeFrames } from './axeframes.js';
-import { ThrownAxe } from './thrownaxe.js';
+import { buildHammerFrames, buildHammerThrowFrames, HAMMER_FRAMES } from './hammerframes.js';
+import { VOLCANO_FRAMES } from './volcano/frames.js';
+import { registerFist } from './fist.js';
+import { DroodleCannon } from './droodle/index.js';
+import { VolcanoBlade, VOLCANO_ID } from './volcano/index.js';
+import { ThrownHammer } from './thrownhammer.js';
 import { BODY_HEIGHT, BODY_RADIUS } from './combat.js';
 import { BOT_NAMES } from './actors.js';
 import { Shield, Turret, buildSkillMeshes } from './skills.js';
@@ -26,6 +31,7 @@ const RESPAWN_DELAY = 2.6;
 const BOT_RESPAWN_DELAY = 3.2;
 export const VICTORY_DELAY = 2;   // seconds of free look before the result popup
 export const HEART_HEAL = 5;      // a heart is a top-up, not a medkit
+export const DEATH_HEARTS = 5;    // what a body scatters when it hits the paper
 
 // Chunks further than this (measured to the chunk's centre, so a big chunk starts losing
 // its outlines a little before its far edge crosses the line) are drawn without ink.
@@ -38,10 +44,33 @@ export class Game {
     this.gl = this.renderer.gl;
     this.hud = new Hud(hudCanvas);
     this.input = new Input(glCanvas);
+    // Listens on the GL canvas: the HUD canvas is pointer-events:none so it can't swallow
+    // clicks meant for the menus, which also means it can't receive touches. Both canvases
+    // fill the viewport, so a coordinate in one is the same coordinate in the other.
+    this.touch = new TouchPad(this.input, glCanvas);
+    this.input.touch = this.touch;
+    this.touch.onMenu = () => this.setPaused(true);
     this.ui = ui;
 
     this.weapons = buildWeaponModels(this.gl);
-    this.axeFrames = buildAxeFrames(this.gl);
+    // Fists are a weapon like any other from here on: the loadout, the HUD, bot melee and
+    // the pickup machinery all find them by id. They just have no mesh - the viewmodel for
+    // fists is the two hands, which fist.js places itself.
+    const handSet = registerFist(this);
+    Object.assign(this.weapons, handSet);
+    // The cannon files itself into WEAPONS/HOLD/MUZZLE/CYCLE, so from here on the loadout,
+    // the HUD, pickups and bot hands all find it the same way they find a pistol.
+    this.droodle = new DroodleCannon(this);
+    // Same deal for the greatblade, which also brings its own swing sheet.
+    this.volcano = new VolcanoBlade(this);
+    this.hammerFrames = buildHammerFrames(this.gl);
+    this.hammerThrowFrames = buildHammerThrowFrames(this.gl);
+    // Which melee weapons draw themselves as cels rather than as a posed mesh, and what to
+    // play. `throwFrames` is optional: only the hammer ever leaves your hand.
+    this.celSheets = {
+      hammer: { frames: this.hammerFrames, throwFrames: this.hammerThrowFrames, count: HAMMER_FRAMES, scale: 0.58, z: -0.60, x: -0.02 },
+      volcano: { frames: this.volcano.frames, throwFrames: null, count: VOLCANO_FRAMES, scale: 0.52, z: -0.62, x: 0.00 },
+    };
     this.skillMeshes = buildSkillMeshes(this.gl);
     this.botNames = [...BOT_NAMES];
 
@@ -68,7 +97,7 @@ export class Game {
     this.actors = [this.player];
     this.shields = [];
     this.turrets = [];
-    this.axes = [];              // axes in flight, stuck in something, or on their way back
+    this.hammers = [];           // hammers in flight, stuck in something, or on their way back
 
     this.map = null;
     this.entities = null;
@@ -83,7 +112,8 @@ export class Game {
     this._v = V.make();
 
     this.input.onLockChange = (locked) => {
-      if (!locked && this.running && !this.matchOver) this.setPaused(true);
+      // On a phone there is no lock to lose, so losing it can't mean "pause".
+      if (!locked && !this.input.touchMode && this.running && !this.matchOver) this.setPaused(true);
     };
 
     this.newMatch();
@@ -135,7 +165,7 @@ export class Game {
     this.actors = [this.player, ...this.bots];
     this.shields.length = 0;
     this.turrets.length = 0;
-    this.axes.length = 0;
+    this.hammers.length = 0;
     this.world = { map: this.map, entities: this.entities, actors: this.actors, shields: this.shields };
 
     this.player.kills = 0; this.player.deaths = 0;
@@ -144,6 +174,8 @@ export class Game {
     this.onActorSpawned(this.player);
     for (const b of this.bots) { b.kills = 0; b.deaths = 0; b.respawn(this.pickSpawn(b)); b.animStep(ANIM_DT); }
 
+    this.droodle.newMatch();
+    this.volcano.newMatch();
     this.hud.killFeed.length = 0;
     this.hud.toasts.length = 0;
     this.time = 0;
@@ -177,6 +209,15 @@ export class Game {
     this.renderer.inkAmount = settings.inkAmount;
     this.renderer.resize(w, h, dpr, settings.resolutionScale);
     this.hud.resize(w, h, dpr);
+    this.touch.resize(w, h);
+  }
+
+  /** Turn the on-screen pad on or off, and keep pointer lock out of its way. */
+  setTouch(on) {
+    this.touch.setEnabled(on);
+    this.input.touchMode = on;
+    if (on) this.input.exitLock();
+    this.touch.resize(window.innerWidth, window.innerHeight);
   }
 
   // ------------------------------------------------------------ loop
@@ -196,6 +237,9 @@ export class Game {
   setPaused(p) {
     if (this.paused === p) return;
     this.paused = p;
+    // The pad isn't drawn behind a menu, so it must not accept presses behind one either.
+    this.touch.suspended = p;
+    if (p) this.touch.releaseAll();
     if (p) { this.input.exitLock(); this.ui.showPause(); }
     else { this.ui.hideAll(); this.input.requestLock(); resumeAudio(); }
   }
@@ -239,6 +283,7 @@ export class Game {
     this.player.update(dt, this.input, now);
     for (const b of this.bots) b.update(dt, now);
     this.entities.update(dt);
+    if (this.touch.enabled) this.touch.sync(this);
     this.collectHearts(this.player);
     for (const b of this.bots) this.collectHearts(b);
 
@@ -252,6 +297,7 @@ export class Game {
       t.update(dt, this);
       if (!t.alive) this.turrets.splice(i, 1);
     }
+    this.volcano.update(dt);
     if (this.impact.t > 0) this.impact.t = Math.max(0, this.impact.t - dt);
 
     // Respawns.
@@ -321,11 +367,14 @@ export class Game {
       b.animStep(ANIM_DT, visible);
     }
     this.entities.animStep();
+    this.droodle.animStep();
+    this.volcano.animStep();
+    this.touch.animStep();
     for (const t of this.turrets) t.animStep();
-    for (let i = this.axes.length - 1; i >= 0; i--) {
-      const a = this.axes[i];
+    for (let i = this.hammers.length - 1; i >= 0; i--) {
+      const a = this.hammers[i];
       a.animStep(this);
-      if (a.done) this._removeAxe(a);
+      if (a.done) this._removeHammer(a);
     }
   }
 
@@ -469,6 +518,15 @@ export class Game {
   // ------------------------------------------------------------ combat events
 
   registerShot(shooter, origin, dir, hit, def) {
+    // A cannon round is not hitscan you see the end of - it is a fireball that has to get
+    // there first. The hitscan has already decided everything; the delivery is held back
+    // until the drawing arrives, and then this runs with the snapshot it took.
+    if (this.droodle.onShot(shooter, origin, dir, hit, def,
+      (snap) => this._registerShotNow(shooter, origin, dir, snap, def))) return;
+    this._registerShotNow(shooter, origin, dir, hit, def);
+  }
+
+  _registerShotNow(shooter, origin, dir, hit, def) {
     const ent = this.entities;
     const isPlayer = shooter.isPlayer;
 
@@ -480,7 +538,9 @@ export class Game {
     const end = hit.kind === 'none'
       ? V.make(origin.x + dir.x * def.range, origin.y + dir.y * def.range, origin.z + dir.z * def.range)
       : hit.point;
-    ent.addTracer(start, end, def.id === 'sniper' ? 0.075 : 0.045);
+    // The cannon's round already crossed the room as a fireball you could watch - that
+    // *was* the tracer, so it doesn't get a second one drawn instantly along the same line.
+    if (!this.droodle.suppressTracer) ent.addTracer(start, end, def.id === 'sniper' ? 0.075 : 0.045);
 
     if (hit.kind === 'actor') {
       this.applyDamage(hit.target, hit.damage, shooter, hit.head, def);
@@ -513,7 +573,9 @@ export class Game {
 
   registerMelee(shooter, origin, dir, res, def) {
     const ent = this.entities;
-    const heavy = def.id === 'axe';
+    // Both two-handers get the bigger mark and the bigger burst. Half the read of a heavy
+    // weapon connecting is that the mark it leaves is a different size from a knife's.
+    const heavy = def.id === 'hammer' || def.id === VOLCANO_ID;
     // The arc the swing cut through the air, laid in the camera plane and rolled to match
     // the direction the weapon travelled.
     if (res.kind !== 'none') {
@@ -532,35 +594,35 @@ export class Game {
     }
   }
 
-  // ------------------------------------------------------------ the axe
+  // ------------------------------------------------------------ the hammer
 
-  /** Third connecting swing: the axe leaves the hand. */
-  throwAxe(owner, origin, dir) {
+  /** Third connecting swing: the hammer leaves the hand. */
+  throwHammer(owner, origin, dir) {
     const lo = owner.loadout;
-    if (lo.melee !== 'axe' || lo.meleeOut) return null;
+    if (lo.melee !== 'hammer' || lo.meleeOut) return null;
     lo.meleeOut = true;
-    lo.meleeHits = 0;
-    const from = V.make(origin.x + dir.x * 0.55, origin.y - 0.1 + dir.y * 0.55, origin.z + dir.z * 0.55);
-    const axe = new ThrownAxe(owner, from, dir);
-    this.axes.push(axe);
-    Sfx.axeThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));
-    if (owner.isPlayer) this.toast('AXE AWAY - ATTACK TO CALL IT BACK');
-    return axe;
+    lo.meleeSwings = 0;
+    const from = V.make(origin.x + dir.x * 0.85, origin.y + 0.16 + dir.y * 0.85, origin.z + dir.z * 0.85);
+    const hammer = new ThrownHammer(owner, from, dir);
+    this.hammers.push(hammer);
+    Sfx.hammerThrow(owner.isPlayer ? 0 : V.dist(owner.pos, this.player.pos));
+    if (owner.isPlayer) this.toast('HAMMER AWAY - ATTACK TO CALL IT BACK');
+    return hammer;
   }
 
   /** Attacking with an empty hand: whistle it home. */
-  recallAxe(owner) {
-    const axe = this.axes.find((a) => a.owner === owner && !a.done);
-    if (!axe || !axe.recallable) return false;
-    axe.recall();
+  recallHammer(owner) {
+    const hammer = this.hammers.find((a) => a.owner === owner && !a.done);
+    if (!hammer || !hammer.recallable) return false;
+    hammer.recall();
     return true;
   }
 
-  /** The axe reached the hand it was flying toward. */
-  onAxeReturned(axe) {
-    this._removeAxe(axe);
-    const lo = axe.owner.loadout;
-    if (axe.owner.alive && lo.melee === 'axe') {
+  /** The hammer reached the hand it was flying toward. */
+  onHammerReturned(hammer) {
+    this._removeHammer(hammer);
+    const lo = hammer.owner.loadout;
+    if (hammer.owner.alive && lo.melee === 'hammer') {
       lo.meleeOut = false;
       lo.cooldown = Math.max(lo.cooldown, 0.28);   // a beat to catch it before swinging again
       lo.drawT = 0;
@@ -568,37 +630,37 @@ export class Game {
     }
   }
 
-  onAxeStuck(axe) {
-    this.entities.addBurst(axe.pos, 0.6, 3);
-    this.entities.addShards(axe.pos, 4, 2.0);
-    Sfx.axeStick(V.dist(axe.pos, this.player.pos));
+  onHammerStuck(hammer) {
+    this.entities.addBurst(hammer.pos, 0.6, 3);
+    this.entities.addShards(hammer.pos, 4, 2.0);
+    Sfx.hammerStick(V.dist(hammer.pos, this.player.pos));
   }
 
-  onAxeHitActor(axe, target, head) {
-    axe.hitActors.add(target);
-    const def = axe.def;
-    this.entities.addSlash(V.clone(axe.pos), 1.4, 0.9, 3);
-    this.applyDamage(target, Math.round(def.damage * (head ? def.headMult : 1)), axe.owner, head, def);
+  onHammerHitActor(hammer, target, head) {
+    hammer.hitActors.add(target);
+    const def = hammer.def;
+    this.entities.addSlash(V.clone(hammer.pos), 1.4, 0.9, 3);
+    this.applyDamage(target, Math.round(def.damage * (head ? def.headMult : 1)), hammer.owner, head, def);
   }
 
-  onAxeHitCrate(axe, crate) {
-    this.entities.damageCrate(crate, axe.def.damage, (c) => this.onCrateBroken(c));
+  onHammerHitCrate(hammer, crate) {
+    this.entities.damageCrate(crate, hammer.def.damage, (c) => this.onCrateBroken(c));
   }
 
   /**
-   * Take an owner's axe out of the world entirely - they swapped it away, or died holding
+   * Take an owner's hammer out of the world entirely - they swapped it away, or died holding
    * nothing. The melee slot is theirs to keep, so this only ever removes the flying copy.
    */
-  dropThrownAxe(owner) {
-    for (let i = this.axes.length - 1; i >= 0; i--) {
-      if (this.axes[i].owner === owner) { this.axes[i].done = true; this.axes.splice(i, 1); }
+  dropThrownHammer(owner) {
+    for (let i = this.hammers.length - 1; i >= 0; i--) {
+      if (this.hammers[i].owner === owner) { this.hammers[i].done = true; this.hammers.splice(i, 1); }
     }
     owner.loadout.meleeOut = false;
   }
 
-  _removeAxe(axe) {
-    const i = this.axes.indexOf(axe);
-    if (i >= 0) this.axes.splice(i, 1);
+  _removeHammer(hammer) {
+    const i = this.hammers.indexOf(hammer);
+    if (i >= 0) this.hammers.splice(i, 1);
   }
 
   applyDamage(target, amount, attacker, head, def) {
@@ -618,16 +680,18 @@ export class Game {
   }
 
   onCrateBroken(crate) {
+    if (this.volcano.crateDrop(crate)) return;
+    if (this.droodle.crateDrop(crate)) return;
     Sfx.crateBreak(V.dist(crate.pos, this.player.pos));
     // A crate normally coughs up a gun, but roughly one in five hands over a melee weapon
-    // instead - which is the only way an axe gets into a match.
+    // instead - which is the only way an hammer gets into a match.
     const drop = randomDropId(this.rng);
     const p = V.make(crate.pos.x, crate.pos.y + 0.2, crate.pos.z);
     this.entities.spawnPickup(drop, p, undefined, undefined, true, true);
     // Most crates also cough up a heart alongside it.
     if (this.rng.chance(0.75)) this.entities.spawnHeart(p);
     this.entities.addBurst(p, 0.75, 3);
-    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED ${drop === 'axe' ? 'AN' : 'A'} ${WEAPONS[drop].name}`);
+    if (V.dist(crate.pos, this.player.pos) < 14) this.toast(`CRATE DROPPED ${drop === 'hammer' ? 'AN' : 'A'} ${WEAPONS[drop].name}`);
   }
 
   killActor(victim, killer) {
@@ -635,7 +699,7 @@ export class Game {
     victim.alive = false;
     victim.deaths++;
     victim.dropGun?.();
-    this.dropThrownAxe(victim);
+    this.dropThrownHammer(victim);
     this.removeShield(victim);
     for (const t of this.turrets) if (t.owner === victim) t.expire(this);
     if (!victim.isPlayer) {
@@ -652,6 +716,15 @@ export class Game {
       Sfx.playerDeath();
     }
     this.entities.addShards(V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z), 8, 2.2);
+    // Anyone who goes down scatters hearts. It rewards the kill without handing the health
+    // straight over: you have to walk into the middle of where the fight just was, which is
+    // also where whoever shoots you next is looking.
+    const drop = V.make(victim.pos.x, victim.pos.y + 1.0, victim.pos.z);
+    for (let i = 0; i < DEATH_HEARTS; i++) this.entities.spawnHeart(drop);
+
+    // The greatblade leaves the body standing. Read before anything below moves the actor:
+    // it wants where the victim fell, not where they respawn.
+    this.volcano.onKill(victim, killer);
 
     const weaponId = killer?.loadout?.id ?? 'pistol';
     if (victim.isPlayer) this.hud.resetStreak();
@@ -805,7 +878,9 @@ export class Game {
     this._queueShadowCasters(r);
 
     this.entities.render(r, this.camera);
-    for (const a of this.axes) a.render(r, this.weapons.models.axe, this._accumAnim);
+    this.droodle.renderWorld(r, this.camera);
+    this.volcano.renderWorld(r, this.camera);
+    for (const a of this.hammers) a.render(r, this.weapons.models.hammer, this._accumAnim);
     for (const sh of this.shields) sh.render(r, this.skillMeshes);
     for (const t of this.turrets) t.render(r, this.skillMeshes, this);
     for (const b of this.bots) {
@@ -823,7 +898,7 @@ export class Game {
       scopeRadius: 0.345,
       damage: p.damageFlash,
       death: p.alive ? 0 : clamp(p.deathTimer * 1.6, 0, 0.8),
-      ...this._impactPost(r),
+      ...this.droodle.patchImpact(this._impactPost(r)),
     });
 
     // No HUD behind the menus - the start screen was reading as a pile of overlapping UI.

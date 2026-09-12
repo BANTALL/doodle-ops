@@ -13,6 +13,7 @@ let ctx = null;
 let master = null;
 let noiseBuf = null;
 let lastScream = null;   // so a new scream can duck the one still playing
+let chargeVoice = null;  // the cannon winding up - only ever one, and it can be cut short
 
 /**
  * Recorded one-shots. `offset` skips leading silence, `tail` is how much of the clip we
@@ -26,6 +27,15 @@ const SAMPLES = {
   // 0.10s in, the scream 0.72s in. Playing them from zero would put a hole where the hit is.
   deathLego:    { url: new URL('../assets/audio/death-lego.mp3', import.meta.url).href,    offset: 0.10, tail: 1.12, gain: 1.0, buffer: null },
   hurtRah:      { url: new URL('../assets/audio/hurt-rah.mp3', import.meta.url).href,      offset: 0.72, tail: 1.36, gain: 1.0, buffer: null },
+  punch:        { url: new URL('../assets/audio/punch.mp3', import.meta.url).href,         offset: 0,    tail: 0.60, gain: 1.0, buffer: null },
+  // The Droodle Cannon. These are already loud and already clip-hot, so they go through
+  // the drive bus rather than straight at the master, where they'd sum past full scale
+  // with everything else the cannon sets off at the same moment.
+  droodleFire:   { url: new URL('../assets/audio/droodle-fire.mp3', import.meta.url).href,   offset: 0.02, tail: 1.05, gain: 1.0, buffer: null },
+  droodleImpact: { url: new URL('../assets/audio/droodle-impact.mp3', import.meta.url).href, offset: 0.02, tail: 1.80, gain: 1.0, buffer: null },
+  droodleCharge: { url: new URL('../assets/audio/droodle-charge.mp3', import.meta.url).href, offset: 0.18, tail: 0.92, gain: 1.0, buffer: null },
+  droodleLaser:  { url: new URL('../assets/audio/droodle-laser.mp3', import.meta.url).href,  offset: 0.02, tail: 2.30, gain: 1.0, buffer: null },
+  droodleReload: { url: new URL('../assets/audio/droodle-reload.mp3', import.meta.url).href, offset: 0.04, tail: 1.28, gain: 1.0, buffer: null },
 };
 
 // Fetch straight away: the files are tiny, and starting now means they're usually decoded
@@ -109,6 +119,15 @@ function getDeathBus() {
   shaper.connect(shelf); shelf.connect(limit); limit.connect(out); out.connect(master);
   deathBus = shaper;
   return deathBus;
+}
+
+/** Ramp a voice out rather than cutting it, so stopping it isn't a click. */
+function fadeOut(voice, time = 0.06) {
+  if (!voice || !ctx) return;
+  const t = ctx.currentTime;
+  voice.gain.cancelScheduledValues(t);
+  voice.gain.setValueAtTime(voice.gain.value, t);
+  voice.gain.exponentialRampToValueAtTime(0.0001, t + time);
 }
 
 // ---------------------------------------------------------------- music
@@ -307,6 +326,14 @@ export const Sfx = {
     else if (kind === 'm4')     bang(t, { level: 0.30 * g, bright: 3400, decay: 0.09, thump: 150, thumpLevel: 0.35 });
     else if (kind === 'sniper') bang(t, { level: 0.60 * g, bright: 1700, decay: 0.42, thump: 70,  thumpLevel: 0.8 });
   },
+  /** A bare fist: a short thump rather than the knife's whistle. */
+  punch(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 26) : 1;
+    if (playSample('punch', 0.85 * g)) return;
+    const t = ctx.currentTime;
+    bang(t, { level: 0.26 * g, bright: 1100, decay: 0.11, thump: 110, thumpLevel: 0.8 });
+  },
   swing(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -321,8 +348,8 @@ export const Sfx = {
     n.start(t); n.stop(t + 0.25);
   },
   stab(dist = 0) { if (ctx) bang(ctx.currentTime, { level: 0.3 * (dist ? spatial(dist, 25) : 1), bright: 900, decay: 0.1, thump: 60, thumpLevel: 0.9 }); },
-  /** The axe: everything the knife does, an octave down and twice as long. */
-  axeSwing(dist = 0) {
+  /** The hammer: everything the knife does, an octave down and twice as long. */
+  hammerSwing(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 30) : 1;
@@ -337,20 +364,73 @@ export const Sfx = {
     n.start(t); n.stop(t + 0.45);
     tone(t, 150, { level: 0.10 * g, dur: 0.28, type: 'sawtooth', slideTo: 62 });
   },
-  axeThrow(dist = 0) {
+  hammerThrow(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 40) : 1;
-    // A rising whistle, so a thrown axe is audible as a thing crossing the room.
+    // A rising whistle, so a thrown hammer is audible as a thing crossing the room.
     tone(t, 420, { level: 0.13 * g, dur: 0.34, type: 'triangle', slideTo: 1150 });
     bang(t, { level: 0.20 * g, bright: 1400, decay: 0.18, thump: 90, thumpLevel: 0.7 });
   },
-  axeStick(dist = 0) {
+  hammerStick(dist = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const g = dist ? spatial(dist, 40) : 1;
     bang(t, { level: 0.42 * g, bright: 700, decay: 0.22, thump: 52, thumpLevel: 1.2, q: 1.2 });
     tone(t + 0.02, 190, { level: 0.11 * g, dur: 0.36, type: 'triangle', slideTo: 88 });
+  },
+
+  // ---- the greatblade -----------------------------------------------------
+  // All four are the same two ingredients in different proportions: filtered noise for the
+  // fire, and a low tone for the weight. What separates them is which one leads.
+  volcanoSwing(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 34) : 1;
+    // Slower and lower than the hammer's - a sweep that starts under the hand and takes the
+    // full length of the swing to arrive.
+    const n = noiseSource(0.7, 0.45);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(150, t);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.42);
+    n.connect(bp);
+    env(bp, t, 0.34 * g, 0.05, 0.46).connect(master);
+    n.start(t); n.stop(t + 0.7);
+    tone(t + 0.04, 140, { level: 0.11 * g, dur: 0.40, type: 'sawtooth', slideTo: 62 });
+  },
+  /** A body is left standing. A short upward swell, so you know something got made. */
+  volcanoPlant(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 40) : 1;
+    tone(t, 90, { level: 0.16 * g, dur: 0.55, type: 'sawtooth', slideTo: 230 });
+    const n = noiseSource(0.6, 0.5);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(600, t);
+    lp.frequency.exponentialRampToValueAtTime(2200, t + 0.5);
+    n.connect(lp);
+    env(lp, t, 0.16 * g, 0.08, 0.5).connect(master);
+    n.start(t); n.stop(t + 0.65);
+  },
+  /** It has seen someone. Two rising pips - the only warning anybody gets. */
+  volcanoArm(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 30) : 1;
+    tone(t, 760, { level: 0.15 * g, dur: 0.07, type: 'square', slideTo: 1020 });
+    tone(t + 0.11, 1020, { level: 0.15 * g, dur: 0.09, type: 'square', slideTo: 1380 });
+  },
+  volcanoBlast(dist = 0) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const g = dist ? spatial(dist, 60) : 1;
+    bang(t, { level: 0.62 * g, bright: 1500, decay: 0.42, thump: 44, thumpLevel: 1.5, q: 0.9 });
+    tone(t + 0.02, 120, { level: 0.18 * g, dur: 0.7, type: 'sawtooth', slideTo: 38 });
+    // The tail: debris coming down for half a second after the bang itself is over.
+    for (let i = 0; i < 5; i++) {
+      bang(t + 0.16 + i * 0.07, { level: 0.10 * g, bright: 2600, decay: 0.11, thumpLevel: 0 });
+    }
   },
   hitMarker() { if (ctx) tone(ctx.currentTime, 1500, { level: 0.13, dur: 0.05, type: 'square', slideTo: 2100 }); },
   hurt() {
@@ -400,6 +480,49 @@ export const Sfx = {
       bang(t, { level: 0.24 * a, bright: 2000, decay: 0.08, thump: 240, thumpLevel: 0.6 });
     }
   },
+  // ---- the Droodle Cannon ------------------------------------------------
+  /** The cannon going off. Repitched a little each time, so a magazine isn't one loop. */
+  droodleFire(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 75) : 1;
+    if (dist > 0 && g <= 0.001) return;
+    if (!playSample('droodleFire', 0.85 * g, { rate: 0.96 + Math.random() * 0.09, dest: getDeathBus() })) {
+      Sfx.shoot('sniper', dist);
+    }
+  },
+  /** Where a round lands. */
+  droodleImpact(dist = 0) {
+    if (!ctx) return;
+    const g = dist ? spatial(dist, 68) : 1;
+    if (dist > 0 && g <= 0.001) return;
+    if (!playSample('droodleImpact', 0.80 * g, { rate: 0.94 + Math.random() * 0.12, dest: getDeathBus() })) {
+      Sfx.crateBreak(dist);
+    }
+  },
+  /** Winding up. Only ever one, and it gets pulled down if the charge is interrupted. */
+  droodleCharge() {
+    if (!ctx) return;
+    fadeOut(chargeVoice, 0.05);
+    chargeVoice = playSample('droodleCharge', 0.70);
+    if (!chargeVoice) Sfx.scope(true);
+  },
+  droodleCancelCharge() { fadeOut(chargeVoice, 0.10); chargeVoice = null; },
+  /** The discharge. The charge is ducked out under it so the two don't pile up. */
+  droodleLaser(dist = 0) {
+    if (!ctx) return;
+    fadeOut(chargeVoice, 0.03);
+    chargeVoice = null;
+    const g = dist ? spatial(dist, 90) : 1;
+    if (!playSample('droodleLaser', 0.95 * g, { dest: getDeathBus() })) {
+      Sfx.shoot('sniper', dist); Sfx.crateBreak(dist);
+    }
+    duckMusic(0.30, 0.7, 0.9);
+  },
+  droodleReload() {
+    if (!ctx) return;
+    if (!playSample('droodleReload', 0.75)) Sfx.reload('out', 0, 'sniper');
+  },
+
   scope(on) { if (ctx) tone(ctx.currentTime, on ? 700 : 500, { level: 0.09, dur: 0.06, type: 'sine', slideTo: on ? 1000 : 360 }); },
   step(dist = 0) {
     if (!ctx) return;

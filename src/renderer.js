@@ -12,6 +12,9 @@ import { makePaperTexture, makeHatchTexture, makeCrayonTexture, makeSplatAtlas, 
 export const MAT = {
   WALL: 0, FLOOR: 1, CEIL: 2, LIGHT: 3, CRATE: 4, TRIM: 5,
   METAL: 6, RED: 7, BLUE: 8, GREEN: 9, PURPLE: 10, ORANGE: 11, SKIN: 12, DARK: 13,
+  // Molten yellow. The palette had a red and an orange but nothing hot enough to sit at the
+  // top of a lava ramp - LIGHT is the ceiling panels and reads as paper, not as heat.
+  LAVA: 14,
 };
 
 const PALETTE = new Float32Array([
@@ -29,7 +32,12 @@ const PALETTE = new Float32Array([
   0.93, 0.57, 0.22,   // 11 orange
   0.98, 0.85, 0.71,   // 12 skin
   0.31, 0.30, 0.34,   // 13 dark
+  0.99, 0.82, 0.20,   // 14 lava yellow
 ]);
+
+// The front of the depth range, kept for the viewmodel so it can win every depth test
+// without wiping the world's depth. See endFrame.
+const VM_DEPTH_SLICE = 0.02;
 
 const SHADOW_SIZE = 1024;
 const SHADOW_HALF = 26;   // world units covered either side of the player
@@ -393,13 +401,20 @@ export class Renderer {
       }
     }
 
-    // --- viewmodel on a cleared depth buffer
+    // --- viewmodel in a reserved slice at the front of the depth range
     if (this.vmFills.len || this.vmInks.len) {
-      // Depth writes have to be back on before the clear - the ink pass left them masked,
-      // and a masked depth clear silently does nothing, which let walls and the floor cut
-      // straight through the player's hands.
+      // This used to clear the depth buffer so walls couldn't cut through the hands. It
+      // worked, and it also threw away the world's depth before it was resolved into the
+      // texture depth of field reads - so DoF saw depth 1.0 everywhere, linearised that to
+      // the far plane, and blurred the entire frame. Fancy mode was a permanent soft focus.
+      //
+      // Reserving the front of the depth range does the same job without the collateral.
+      // Under the world's projection (near 0.05) everything it draws lands above 0.9, so
+      // the viewmodel at 0..0.02 still wins every depth test and still occludes itself,
+      // while the world's depth survives - and the hands linearise to about the near plane,
+      // which is exactly where they should be for DoF.
       gl.depthMask(true);
-      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.depthRange(0, VM_DEPTH_SLICE);
       const origin = V.make(0, 0, 0);
       gl.disable(gl.BLEND);
       gl.enable(gl.CULL_FACE);
@@ -416,6 +431,7 @@ export class Renderer {
       gl.disable(gl.CULL_FACE);
       this._setInkFrameUniforms(pi2, this.identity, this.projVM, 0.995);
       this._runInks(this.vmInks, pi2, inkScale * 1.3);
+      gl.depthRange(0, 1);
     }
 
     // --- resolve, then the blur chain that feeds both bloom and depth of field

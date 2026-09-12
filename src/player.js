@@ -10,7 +10,9 @@ import { getDoodler } from './doodlers.js';
 import { SHIELD_MAX_HP, SHIELD_PATCH_BELOW } from './skills.js';
 import { Sfx } from './audio.js';
 import { FillBuilder, InkBuilder } from './geom.js';
-import { AXE_FRAMES } from './axeframes.js';
+import { ID as FIST_ID, sampleFist, drawFists } from './fist.js';
+import { DROODLE_ID } from './droodle/index.js';
+import { ID as VOLCANO_ID } from './volcano/weapon.js';
 import { MAT } from './renderer.js';
 
 const WALK_SPEED = 5.15;
@@ -34,9 +36,12 @@ const IDLE_TWIRL_AFTER = 3.0;
 const TWIRL_DURATION = 2.0;
 const TWIRL_TURNS = 2;              // whole turns per trick, so it lands where it started
 
-// How big the axe cel card is drawn. The cels are authored in a space about two units
+// How big the hammer cel card is drawn. The cels are authored in a space about two units
 // across, and this is what makes that fill the lower half of the view.
-const AXE_CEL_SCALE = 0.58;
+
+// Offsets applied to the melee hold pose while the hammer is away, so an empty hand sits
+// somewhere you can see it: [dx, dy, dz, dPitch].
+const HIDDEN_HAND = [0.06, 0.16, -0.06, -0.40];
 
 /** Matrix at `from` whose +Z axis points at `toward`. Used to aim the forearms. */
 function aimMatrix(out, from, toward) {
@@ -178,7 +183,7 @@ export class Player {
     this.punchPitch = this.punchYaw = 0;
     this.damageFlash = 0;
     // Your melee weapon is yours: dying resets the gun to a pistol but never puts the
-    // axe back in the crate it came from.
+    // hammer back in the crate it came from.
     this.loadout = new Loadout('pistol', this._meleeId || 'knife');
     this.pitch = 0;
     this.momentum = 0;
@@ -191,6 +196,7 @@ export class Player {
     this.twirlBlend = 0;
     this.twirlT = 0;
     this.swingFrame0 = null;
+    this.swingThrow = false;
   }
 
   /** Speed multiplier from running momentum. */
@@ -227,7 +233,7 @@ export class Player {
     }
 
     // --- look
-    if (input.locked && (input.mouseDX || input.mouseDY)) this.applyLook(input.mouseDX, input.mouseDY);
+    if ((input.locked || input.touchMode) && (input.mouseDX || input.mouseDY)) this.applyLook(input.mouseDX, input.mouseDY);
 
     // Recoil punch: springs back toward zero.
     const spring = 46, damping = 11;
@@ -237,15 +243,14 @@ export class Player {
     this.punchYaw += this.punchVelY * dt;
 
     // --- movement intent
-    let fwd = 0, side = 0;
-    if (input.down('KeyW')) fwd += 1;
-    if (input.down('KeyS')) fwd -= 1;
-    if (input.down('KeyD')) side += 1;
-    if (input.down('KeyA')) side -= 1;
+    // Analog, so a thumb stick can ask for half speed. Keys still answer 0 or 1.
+    const axis = input.moveAxis(this._axis || (this._axis = { fwd: 0, side: 0 }));
+    let fwd = axis.fwd, side = axis.side;
     const mag = Math.hypot(fwd, side);
     let wx = 0, wz = 0;
     if (mag > 0) {
-      fwd /= mag; side /= mag;
+      const scale = Math.min(1, mag) / mag;
+      fwd *= scale; side *= scale;
       const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
       wx = (-sy * fwd) + (cy * side);
       wz = (-cy * fwd) + (-sy * side);
@@ -380,19 +385,27 @@ export class Player {
       lo.scoped = false;
     }
 
-    if (input.hit('KeyR')) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
+    if (input.hit('KeyR')) { if (lo.startReload()) { if (lo.def.id === DROODLE_ID) Sfx.droodleReload(); else Sfx.reload('out', 0, lo.def.id); } }
 
     // Melee swings land a beat after the button, matching the animation.
     if (lo.pendingMelee > 0) {
       lo.pendingMelee -= dt;
       if (lo.pendingMelee <= 0) this._meleeHit();
     }
+    // A throw lets go on its own beat - the cel where the hand opens.
+    if (lo.pendingThrow > 0) {
+      lo.pendingThrow -= dt;
+      if (lo.pendingThrow <= 0) {
+        const eye = this.eye;
+        game.throwHammer(this, eye, this.aimDir(this._dir));
+      }
+    }
 
     // Idle knife play: stand still holding the knife and every few seconds you flip it
     // over in your hand, then let it rest again. One trick, then a pause - a knife that
     // never stops rotating reads as a broken animation, not as fidgeting.
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    // Knife only. Flipping a felling axe over one finger is not a thing anyone does.
+    // Knife only. Flipping a felling hammer over one finger is not a thing anyone does.
     const idleOk = lo.isMelee && lo.melee === 'knife' && !lo.meleeOut
       && lo.cooldown <= 0 && lo.drawT <= 0 && speed < 1.2 && !input.buttons[0];
     if (idleOk) this.idleTimer += dt; else this.idleTimer = 0;
@@ -405,21 +418,26 @@ export class Player {
     const wantFire = def.auto ? input.buttons[0] : input.buttonPressed[0];
     if (wantFire) {
       if (def.kind === 'gun' && lo.ammo <= 0 && lo.reloadT <= 0 && !lo.drawT) {
-        if (lo.reserve > 0) { if (lo.startReload()) Sfx.reload('out', 0, lo.def.id); }
+        if (lo.reserve > 0) { if (lo.startReload()) { if (lo.def.id === DROODLE_ID) Sfx.droodleReload(); else Sfx.reload('out', 0, lo.def.id); } }
         else if (input.buttonPressed[0]) Sfx.uiClick();
       } else if (def.kind === 'melee' && lo.meleeOut) {
         // Empty hand: the attack button is the recall.
-        if (input.buttonPressed[0] && lo.drawT <= 0) game.recallAxe(this);
+        if (input.buttonPressed[0] && lo.drawT <= 0) game.recallHammer(this);
       } else {
         // Capture the scope state before firing: cycling the bolt drops the scope, and a
         // shot taken through the glass is a guaranteed kill.
         const scoped = def.scope && lo.scopeT > 0.9;
         if (lo.tryFire(now)) {
           if (def.kind === 'melee') {
-            if (def.id === 'axe') Sfx.axeSwing(); else Sfx.swing();
+            if (def.id === 'hammer') Sfx.hammerSwing();
+            else if (def.id === VOLCANO_ID) Sfx.volcanoSwing();
+            else if (def.id === FIST_ID) Sfx.punch();
+            else Sfx.swing();
             this.vm.kick = 1;
             this.vm.lastFrameFired = game.animFrame;
             this.swingFrame0 = game.animFrame;   // which animation step the cel sheet starts on
+            this.swingThrow = lo.throwing;       // which sheet: the cut, or the throw
+            if (lo.throwing && this.isPlayer) game.toast('THROWING');
           } else this._fireGun(def, scoped);
         }
       }
@@ -477,6 +495,9 @@ export class Player {
 
   _fireGun(def, scoped = false) {
     const game = this.game;
+    // Every third pull of the cannon's trigger fires nothing: it winds up, and lets go on
+    // its own nine animation frames later.
+    if (game.droodle.onPlayerFire(this, def)) return;
     const eye = this.eye;
     const dir = this.aimDir(this._dir);
     const moveFactor = clamp(Math.hypot(this.vel.x, this.vel.z) / WALK_SPEED, 0, 1) * (this.onGround ? 1 : 1.7);
@@ -510,12 +531,6 @@ export class Player {
     const res = resolveMelee(game.world, this, eye, dir, def);
     game.registerMelee(this, eye, dir, res, def);
 
-    // Land three swings with the axe and the third one carries it out of your hand. It
-    // only counts hits on people - chopping crates all day doesn't build the throw.
-    if (def.throwEvery && res.kind === 'actor') {
-      lo.meleeHits++;
-      if (lo.meleeHits >= def.throwEvery) game.throwAxe(this, eye, dir);
-    }
   }
 
   _updateHighlight(input) {
@@ -547,9 +562,9 @@ export class Player {
       if (lo.melee === p.gunId) return;              // already carrying it
       const dropped = lo.takeMelee(p.gunId);
       game.entities.removePickup(p);
-      // The axe you were holding goes back on the floor for whoever wants it. If it was
+      // The hammer you were holding goes back on the floor for whoever wants it. If it was
       // away when you swapped, the thrown one is recalled out of the world instead.
-      game.dropThrownAxe(this);
+      game.dropThrownHammer(this);
       if (dropped) {
         game.entities.spawnPickup(dropped, V.make(this.pos.x, this.pos.y + 0.9, this.pos.z));
         Sfx.drop();
@@ -695,7 +710,7 @@ export class Player {
     }
 
     // ---- knife slash: wind up, cut fast, recover ----
-    // The axe is not posed here at all: its swing is twelve drawn frames, and between them
+    // The hammer is not posed here at all: its swing is twelve drawn frames, and between them
     // it just sits in the rest pose waiting out the rest of its three-second cooldown.
     if (def.kind === 'melee' && def.id === 'knife' && !swapping) {
       const cd = lo.cooldown > 0 ? Math.min(def.rate, lo.cooldown + back) : 0;
@@ -766,13 +781,21 @@ export class Player {
     out.id = id; out.def = def; out.hold = hold;
     out.px = px; out.py = py; out.pz = pz;
     out.rx = rx; out.ry = ry; out.rz = rz;
-    // While the axe is away there is nothing in your hand, but the hand is still there -
+    // While the hammer is away there is nothing in your hand, but the hand is still there -
     // lifted into view and opened, since an empty fist at the weapon's grip point sits
     // below the bottom of the screen where the haft used to be.
     out.weaponHidden = curDef.kind === 'melee' && lo.meleeOut && !swapping;
     out.scale = scale; out.hands = hands; out.smear = smear;
     out.handRx = handRx;
-    if (out.weaponHidden) { out.px -= 0.07; out.py += 0.26; out.pz += 0.16; out.rx -= 0.35; out.handRx -= 0.35; }
+    // Fists are posed by their own animation rather than by a grip point, and it has to be
+    // sampled here so a smear ghost - the same pose asked for a fraction of a step ago -
+    // gets the punch it belongs to instead of the current one.
+    out.essFist = id === FIST_ID ? sampleFist(this, back, out) : null;
+    this.game.droodle.posePatch(this, back, out);
+    if (out.weaponHidden) {
+      out.px += HIDDEN_HAND[0]; out.py += HIDDEN_HAND[1]; out.pz += HIDDEN_HAND[2];
+      out.rx += HIDDEN_HAND[3]; out.handRx += HIDDEN_HAND[3];
+    }
     out.reload = reload; out.scope = scope;
     return out;
   }
@@ -791,10 +814,10 @@ export class Player {
     const main = this._vmPose(lag, scratch[0]);
     if (!this.game.weapons.models[main.id]) return;
 
-    // An axe swing is a drawing, not a pose. For its twelve frames the viewmodel *is* the
-    // cel - no 3D axe, no 3D hands - the way a 2D game would do it, and the way the frames
-    // in the middle of the sheet need it to be, since there is no axe in them to pose.
-    if (this._axeCelIndex() >= 0) { this._drawAxeCel(r); return; }
+    // An hammer swing is a drawing, not a pose. For its twelve frames the viewmodel *is* the
+    // cel - no 3D hammer, no 3D hands - the way a 2D game would do it, and the way the frames
+    // in the middle of the sheet need it to be, since there is no hammer in them to pose.
+    if (this._meleeCelIndex() >= 0) { this._drawMeleeCel(r); return; }
 
     // ---- smear: the original trail -----------------------------------------
     // Only the knife swing gets it. A couple of faint copies of the outline, sampled a
@@ -810,29 +833,41 @@ export class Player {
       }
     }
 
+    this.game.droodle.drawGhosts(r, this);
     this._drawWeapon(r, main, 1, false, null);
   }
 
+  /** The drawn swing sheet for whatever melee weapon is in hand, or null if it has none. */
+  _celSheet() {
+    return this.game.celSheets[this.loadout.melee] ?? null;
+  }
+
   /**
-   * Which cel of the axe swing is showing, or -1 when the swing isn't playing. Driven off
-   * the animation frame the swing started on, so it advances on twelves no matter what the
+   * Which cel of the swing is showing, or -1 when the swing isn't playing. Driven off the
+   * animation frame the swing started on, so it advances on twelves no matter what the
    * display is doing.
    */
-  _axeCelIndex() {
+  _meleeCelIndex() {
     const lo = this.loadout;
-    if (!lo.isMelee || lo.melee !== 'axe' || lo.meleeOut || lo.drawT > 0) return -1;
+    const sheet = this._celSheet();
+    if (!sheet || !lo.isMelee || lo.drawT > 0) return -1;
     if (lo.cooldown <= 0 || this.swingFrame0 == null) return -1;
+    // A throw keeps playing after the weapon has gone: the last six cels are the empty hand
+    // coming down, which is the only thing that explains where the hammer went.
+    if (lo.meleeOut && !this.swingThrow) return -1;
     const k = this.game.animFrame - this.swingFrame0;
-    return k >= 0 && k < AXE_FRAMES ? k : -1;
+    return k >= 0 && k < sheet.count ? k : -1;
   }
 
   /** The cel, parked on a card in front of the camera. */
-  _drawAxeCel(r) {
-    const frames = this.game.axeFrames;
-    const k = this._axeCelIndex();
+  _drawMeleeCel(r) {
+    const sheet = this._celSheet();
+    const k = this._meleeCelIndex();
+    if (!sheet || k < 0) return;
+    const frames = (this.swingThrow && sheet.throwFrames) ? sheet.throwFrames : sheet.frames;
     if (!frames || !frames[k]) return;
-    const s = AXE_CEL_SCALE;
-    const m = M4.compose(this._m, { x: -0.02, y: 0.0, z: -0.60 }, 0, 0, 0, s, s, s);
+    const s = sheet.scale;
+    const m = M4.compose(this._m, { x: sheet.x, y: 0.0, z: sheet.z }, 0, 0, 0, s, s, s);
     const opts = { objSeed: 4.4 + k * 1.7, colorAmt: this.colorAmt };
     r.vmFill(frames[k].fill, m, opts);
     r.vmInk(frames[k].ink, m, { objSeed: 4.4 + k * 1.7, widthScale: 1.15 });
@@ -845,6 +880,9 @@ export class Player {
   }
 
   _drawWeapon(r, pose, alpha, inkOnly, smear) {
+    // No mesh, no grip point: two hands posed like a boxer. `_drawWeapon` can only put one
+    // hand on a grip and optionally a second on a support, so fists draw themselves.
+    if (pose.essFist) { drawFists(r, this, pose, alpha, inkOnly, smear); return; }
     const model = this.game.weapons.models[pose.id];
     const s = pose.scale;
     const m = this._m;
@@ -883,18 +921,24 @@ export class Player {
         { x: pose.px, y: pose.py, z: pose.pz }, pose.ry, pose.handRx, pose.rz, s, s, s);
       const gripWorld = applyMat(mHand, pose.hold.grip);
       M4.compose(local, { x: gripWorld[0], y: gripWorld[1], z: gripWorld[2] }, pose.ry, pose.handRx + 0.35, pose.rz, 1, 1, 1);
-      r.vmFill(hands.hand.fill, sm(local), opts);
-      r.vmInk(hands.hand.ink, sm(local), opts);
+      r.vmFill(hands.gripRight.fill, sm(local), opts);
+      r.vmInk(hands.gripRight.ink, sm(local), opts);
       this._drawArm(r, hands, gripWorld, [0.30, -0.62, 0.22], smear);
 
       if (pose.hold.support && pose.scope < 0.8) {
         const sw = applyMat(mHand, pose.hold.support);
         M4.compose(local, { x: sw[0], y: sw[1], z: sw[2] }, pose.ry - 0.3, pose.handRx + 0.5, pose.rz, 1, 1, 1);
-        r.vmFill(hands.hand.fill, sm(local), opts);
-        r.vmInk(hands.hand.ink, sm(local), opts);
+        r.vmFill(hands.gripLeft.fill, sm(local), opts);
+        r.vmInk(hands.gripLeft.ink, sm(local), opts);
         this._drawArm(r, hands, sw, [-0.34, -0.62, 0.22], smear);
       }
     }
+
+    // Everything that comes out of the cannon's mouth - the charge, the blast, the first
+    // couple of metres of the beam - drawn here rather than in the world, because the
+    // viewmodel owns the front of the depth range and a world-space blast a metre in front
+    // of the camera would end up behind the gun that made it.
+    if (!inkOnly) this.game.droodle.drawMuzzle(r, this, pose);
 
     // --- muzzle flash, drawn in the viewmodel pass so the gun can't hide it
     if (this.flashFrames > 0 && pose.def.kind === 'gun' && this.flashMesh) {
@@ -919,7 +963,7 @@ function makePose() {
   return {
     id: 'pistol', def: null, hold: null,
     px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0,
-    scale: 1, hands: true, smear: 0, reload: 0, scope: 0, handRx: 0, weaponHidden: false,
+    scale: 1, hands: true, smear: 0, reload: 0, scope: 0, handRx: 0, weaponHidden: false, essFist: null,
   };
 }
 

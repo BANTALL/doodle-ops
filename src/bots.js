@@ -15,7 +15,7 @@
 //     individual bullets. They are not dodging you, and it shows.
 
 import { Loadout, spreadDir, resolveShot, resolveMelee, EYE_HEIGHT } from './combat.js';
-import { WEAPONS, MUZZLE, randomGunId, KNIFE } from './weapons.js';
+import { WEAPONS, MUZZLE, randomGunId, START_MELEE } from './weapons.js';
 import { LOD_INK, LOD_DETAIL } from './entities.js';
 import { CharacterRig, SHIRT_MATS } from './actors.js';
 import { M4, V, Rng, clamp, lerp, damp, dirFrom, yawOf, angleTo, wrapAngle, approachAngle, DEG, TAU } from './math.js';
@@ -43,9 +43,13 @@ function gunScore(id) {
   return { m4: 3.0, sniper: 2.4, pistol: 1.8 }[id] ?? 1;
 }
 
-/** How badly a bot wants a melee weapon it hasn't got. An axe is worth crossing a room for. */
+/**
+ * How badly a bot wants a melee weapon it hasn't got. A hammer is worth crossing a room for;
+ * a greatblade is worth crossing two, and a bot holding one gets the fire trail for free
+ * without knowing anything about it.
+ */
 function meleeScore(id) {
-  return { axe: 3.0, knife: 1.0 }[id] ?? 0;
+  return { volcano: 4.0, hammer: 3.0, knife: 1.0, fist: 0 }[id] ?? 0;
 }
 
 export class Bot {
@@ -164,7 +168,7 @@ export class Bot {
     this.target = null;
     this.timeSinceSeen = 99;
     // Same rule the player gets: the gun resets, the melee weapon you found is yours.
-    this.loadout = new Loadout(randomGunId(this.rng), this.loadout ? this.loadout.melee : KNIFE);
+    this.loadout = new Loadout(randomGunId(this.rng), this.loadout ? this.loadout.melee : START_MELEE);
     this.goalCell = -1;
     this.flow = null;
     this.rigDirty = true;
@@ -237,14 +241,21 @@ export class Bot {
     // or a topped-up reserve is a nice-to-have when nobody is shooting.
     const wantGun = !lo.hasGun;
     const wantAmmo = lo.hasGun && lo.ammo + lo.reserve <= WEAPONS[lo.gun].mag * 0.5;
+    // Hurt enough to care about the hearts a body leaves behind. Below a third they want
+    // one badly enough to break off a fight for it.
+    const hurt = this.health / this.maxHealth;
+    const wantHeart = hurt < 0.65 && this._nearestHeart(hurt < 0.34 ? 26 : 14) !== null;
 
     if (this.target && (this.targetVisible || this.timeSinceSeen < MEMORY_TIME)) {
       const dist = V.distXZ(this.pos, this.target.pos);
       // Reloading with someone in your face is how you die; back off first.
       if (lo.reloadT > 0 && dist < 9 && this.targetVisible) this.state = STATE.RETREAT;
       else if (!lo.hasGun && dist > 7 && !this.targetVisible) this.state = STATE.LOOT;
+      // Nearly dead with a heart in reach: take it. Only when they're not being looked at,
+      // because turning your back on a fight to fetch health is how bots look stupid.
+      else if (hurt < 0.34 && wantHeart && !this.targetVisible) this.state = STATE.LOOT;
       else this.state = this.targetVisible ? STATE.COMBAT : STATE.HUNT;
-    } else if (wantGun || wantAmmo || this._wantsBetterMelee()) {
+    } else if (wantGun || wantAmmo || wantHeart || this._wantsBetterMelee()) {
       this.state = STATE.LOOT;
     } else if (this.state === STATE.INVESTIGATE && this.timeSinceSeen < MEMORY_TIME) {
       // stay investigating
@@ -327,7 +338,7 @@ export class Bot {
   /** Nearest worthwhile pickup, or a crate to smash open if nothing is lying around. */
   /**
    * Is there a melee weapon worth crossing the room for? Checked rather than assumed, so a
-   * bot with a knife doesn't spend the whole match in LOOT looking for an axe that nobody
+   * bot with a knife doesn't spend the whole match in LOOT looking for an hammer that nobody
    * has dropped.
    */
   _wantsBetterMelee() {
@@ -339,10 +350,32 @@ export class Bot {
     return false;
   }
 
+  /** The closest heart within `radius`, or null. */
+  _nearestHeart(radius) {
+    let best = null, bestD = radius;
+    for (const p of this.game.entities.pickups) {
+      if (p.kind !== 'heart') continue;
+      const d = V.distXZ(this.pos, p.pos);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
   _findLoot() {
     const game = this.game, map = game.map;
     const mine = gunScore(this.loadout.gun);
     let best = null, bestD = 34;
+    // Health first when it's getting serious: a better gun is no use at nine health.
+    const hurt = this.health / this.maxHealth;
+    if (hurt < 0.65) {
+      const heart = this._nearestHeart(hurt < 0.34 ? 26 : 14);
+      // Below a third, a heart outranks everything. Above it, only take one that's on the
+      // way - a bot detouring across the map for five health reads as broken.
+      if (heart && (hurt < 0.34 || V.distXZ(this.pos, heart.pos) < 14)) {
+        return { pickup: heart, cell: cellIdx(map, heart.pos) };
+      }
+    }
+
     const myMelee = meleeScore(this.loadout.melee);
     for (const p of game.entities.pickups) {
       if (p.kind === 'heart') continue;
@@ -635,10 +668,11 @@ export class Bot {
     if (!this.lootTarget) return;
     const p = this.lootTarget;
     if (game.entities.pickups.indexOf(p) < 0) { this.lootTarget = null; return; }
+    if (p.kind === 'heart') { this.lootTarget = null; return; }  // walked onto, not picked up
     if (V.distXZ(this.pos, p.pos) > 1.5 || Math.abs(p.pos.y - this.pos.y) > 2) return;
     const lo = this.loadout;
     if (p.slotKind === 'melee') {
-      // Bots swing an axe as happily as you do; they just never throw it, which is the
+      // Bots swing an hammer as happily as you do; they just never throw it, which is the
       // one part of the weapon that belongs to the player.
       const dropped = lo.takeMelee(p.gunId);
       if (dropped) game.entities.spawnPickup(dropped, V.make(this.pos.x, this.pos.y + 0.9, this.pos.z));

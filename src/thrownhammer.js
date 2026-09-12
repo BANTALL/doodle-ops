@@ -1,14 +1,15 @@
-// The axe once it has left your hand.
+// The hammer once it has left your hand.
 //
 // Three states, and it is never in more than one: in flight, buried in whatever stopped
-// it, or on its way back to you. Attacking with the axe while it is away is the recall -
+// it, or on its way back to you. Attacking with the hammer while it is away is the recall -
 // there is no pickup prompt, because the whole point is that you call it back rather than
 // walk to it.
 //
 // It moves on the animation clock like everything else that flip-books, but each step
 // resolves as a raycast over the segment it just crossed rather than a point test at the
-// new position. At thirty metres a second a twelfth of a second is two and a half metres,
-// which is wide enough to step straight through a bot.
+// new position: even at a walking pace a twelfth of a second is wide enough to step
+// straight through a bot, and the first version threw at thirty metres a second, which
+// crossed a room in three frames and was over before you saw it leave.
 
 import { WEAPONS } from './weapons.js';
 import { rayCharacter } from './entities.js';
@@ -17,15 +18,15 @@ import { M4, V } from './math.js';
 import { Sfx } from './audio.js';
 
 const ANIM_DT = 1 / 12;
-const GRAVITY = 3.2;        // barely any: a thrown axe should read as flat and fast
+const GRAVITY = 3.2;        // barely any: a thrown hammer should read as flat and fast
 // How far it tumbles per animation step. Anything much past a radian and consecutive
 // frames stop looking like the same object turning and start looking like noise.
-const SPIN_PER_STEP = 1.15;
-const RECALL_SPIN_PER_STEP = -0.95;
+const SPIN_PER_STEP = 0.92;
+const RECALL_SPIN_PER_STEP = -0.80;
 
-export class ThrownAxe {
+export class ThrownHammer {
   constructor(owner, origin, dir) {
-    const def = WEAPONS.axe;
+    const def = WEAPONS.hammer;
     this.owner = owner;
     this.def = def;
     this.pos = V.clone(origin);
@@ -44,7 +45,7 @@ export class ThrownAxe {
 
   get recallable() { return this.state === 'stuck'; }
 
-  /** Start the trip home. The axe ignores everything on the way back. */
+  /** Start the trip home. The hammer ignores everything on the way back. */
   recall() {
     if (this.state === 'returning') return false;
     this.state = 'returning';
@@ -70,7 +71,7 @@ export class ThrownAxe {
         // just drops it out of existence.
         V.copy(this.pos, hand);
         this.done = true;
-        game.onAxeReturned(this);
+        game.onHammerReturned(this);
         return;
       }
       V.set(this.pos, this.pos.x + (dx / d) * step, this.pos.y + (dy / d) * step, this.pos.z + (dz / d) * step);
@@ -99,11 +100,11 @@ export class ThrownAxe {
       this.travelled += hit.dist;
       this._pushTrail();
       if (hit.kind === 'actor') {
-        game.onAxeHitActor(this, hit.target, hit.head);
+        game.onHammerHitActor(this, hit.target, hit.head);
         // Buries itself in them and drops at their feet, rather than carrying on through.
         this._embed(game, this.pos, { x: -dir.x, y: 0, z: -dir.z }, true);
       } else if (hit.kind === 'crate') {
-        game.onAxeHitCrate(this, hit.target);
+        game.onHammerHitCrate(this, hit.target);
         this._embed(game, this.pos, hit.normal);
       } else {
         this._embed(game, this.pos, hit.normal);
@@ -167,7 +168,7 @@ export class ThrownAxe {
       this.yaw = Math.atan2(-normal.x, -normal.z);
     }
     this.spin = 0;
-    game.onAxeStuck(this);
+    game.onHammerStuck(this);
   }
 
   _handPoint(game) {
@@ -183,7 +184,7 @@ export class ThrownAxe {
 
   /**
    * Drawn with two ghosts strung back along the path it crossed this step. At twelve
-   * frames a second the axe teleports two metres between frames; without the ghosts that
+   * frames a second the hammer teleports two metres between frames; without the ghosts that
    * reads as a bug rather than as a weapon travelling fast.
    */
   render(r, model, lag) {
@@ -195,7 +196,7 @@ export class ThrownAxe {
     const pitch = flying ? spin : this.stuckPitch;
 
     if (flying) {
-      // Two ghosts, at the positions and rotations the axe actually had on the last two
+      // Two ghosts, at the positions and rotations the hammer actually had on the last two
       // steps - not arbitrary offsets, or they read as a wireframe tangle instead of a
       // trail. Filled as well as outlined, faintly, so they smear rather than scribble.
       const ghosts = [
